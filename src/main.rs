@@ -11,11 +11,14 @@ type Symbol = DefaultSymbol;
 enum Value<'a> {
     Sample(f32),
     Index(usize),
-    Gen(Env<'a>, &'a Expr<'a, ()>, &'a Expr<'a, ()>),
+    Gen(Env<'a>, Box<Value<'a>>, &'a Expr<'a, ()>),
     Closure(Env<'a>, Symbol, &'a Expr<'a, ()>),
+    Suspend(Env<'a>, &'a Expr<'a, ()>),
 }
 
+// TODO: use a better type here... eventually we should resolve symbols and just use de bruijn offsets or similar...
 type Env<'a> = HashMap<Symbol, Value<'a>>;
+// type Env<'a> = imbl::HashMap<Symbol, Value<'a>>;
 
 #[derive(Debug, Clone)]
 enum Expr<'a, R> {
@@ -23,21 +26,27 @@ enum Expr<'a, R> {
     Val(R, Value<'a>),
     Lam(R, Symbol, &'a Expr<'a, R>),
     App(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
+    Force(R, &'a Expr<'a, R>),
+    Lob(R, Symbol, &'a Expr<'a, R>),
+    Gen(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
 }
 
 impl<'a, R> Expr<'a, R> {
     fn map_ext<'b, U>(&self, arena: &'b Arena<Expr<'b, U>>, f: &dyn Fn(&R) -> U) -> Expr<'b, U> where 'a: 'b {
         match *self {
-            Expr::Var(ref r, ref s) => Expr::Var(f(r), s.clone()),
+            Expr::Var(ref r, s) => Expr::Var(f(r), s),
             Expr::Val(ref r, ref v) => Expr::Val(f(r), v.clone()),
-            Expr::Lam(ref r, ref s, ref e) => Expr::Lam(f(r), s.clone(), arena.alloc(e.map_ext(arena, f))),
+            Expr::Lam(ref r, s, ref e) => Expr::Lam(f(r), s, arena.alloc(e.map_ext(arena, f))),
             Expr::App(ref r, ref e1, ref e2) => Expr::App(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
+            Expr::Force(ref r, ref e) => Expr::Force(f(r), arena.alloc(e.map_ext(arena, f))),
+            Expr::Lob(ref r, s, ref e) => Expr::Lob(f(r), s, arena.alloc(e.map_ext(arena, f))),
+            Expr::Gen(ref r, ref e1, ref e2) => Expr::Gen(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
         }
     }
 }
         
 
-fn interp<'a>(env: &Env<'a>, expr: &Expr<'a, ()>) -> Result<Value<'a>, &'static str> {
+fn interp<'a>(env: &Env<'a>, expr: &'a Expr<'a, ()>) -> Result<Value<'a>, &'static str> {
     match *expr {
         Expr::Var(_, ref x) => Ok(env.get(x).ok_or("where's the var")?.clone()),
         Expr::Val(_, ref v) => Ok(v.clone()),
@@ -53,7 +62,24 @@ fn interp<'a>(env: &Env<'a>, expr: &Expr<'a, ()>) -> Result<Value<'a>, &'static 
             // TODO: i don't think rust has TCE and this can't be
             // TCE'd anyway bc new_env must be deallocated.
             interp(&new_env, &*ebody)
-        }
+        },
+        Expr::Force(_, ref e) => {
+            let v = interp(env, &*e)?;
+            let Value::Suspend(env1, ebody) = v else {
+                return Err("don't force something that's not a suspension!!");
+            };
+            interp(&env1, &*ebody)
+        },
+        Expr::Lob(_, s, ref e) => {
+            let susp = Value::Suspend(env.clone(), expr);
+            let mut new_env = env.clone();
+            new_env.insert(s, susp);
+            interp(&new_env, e)
+        },
+        Expr::Gen(_, ref eh, ref et) => {
+            let vh = interp(env, eh)?;
+            Ok(Value::Gen(env.clone(), Box::new(vh), et))
+        },
     }
 }
 
@@ -91,14 +117,18 @@ make_node_enum!(ConcreteNode {
     WrapExpression: wrap_expression,
     Identifier: identifier,
     Literal: literal,
+    Sample: sample,
     ApplicationExpression: application_expression,
-    LambdaExpression: lambda_expression
+    LambdaExpression: lambda_expression,
+    LobExpression: lob_expression,
+    ForceExpression: force_expression,
+    GenExpression: gen_expression
 } with matcher ConcreteNodeMatcher);
 
 struct AbstractionContext<'a, 'b> {
     original_text: &'a str,
     node_matcher: ConcreteNodeMatcher,
-    interner: DefaultStringInterner,
+    interner: &'a mut DefaultStringInterner,
     arena: &'b Arena<Expr<'b, tree_sitter::Range>>,
 }
 
@@ -126,6 +156,11 @@ impl<'a, 'b> AbstractionContext<'a, 'b> {
                 let int_lit = self.node_text(node).parse().map_err(|_| "int lit out of bounds".to_string())?;
                 Ok(Expr::Val(node.range(), Value::Index(int_lit)))
             },
+            Some(ConcreteNode::Sample) => {
+                let sample_text = self.node_text(node);
+                let sample = sample_text.parse().map_err(|_| format!("couldn't parse sample {:?}", sample_text))?;
+                Ok(Expr::Val(node.range(), Value::Sample(sample)))
+            },
             Some(ConcreteNode::ApplicationExpression) => {
                 let e1 = self.parse_concrete(node.child(0).unwrap())?;
                 let e2 = self.parse_concrete(node.child(1).unwrap())?;
@@ -135,6 +170,20 @@ impl<'a, 'b> AbstractionContext<'a, 'b> {
                 let x = self.interner.get_or_intern(self.node_text(node.child(1).unwrap()));
                 let e = self.parse_concrete(node.child(3).unwrap())?;
                 Ok(Expr::Lam(node.range(), x, self.arena.alloc(e)))
+            },
+            Some(ConcreteNode::LobExpression) => {
+                let x = self.interner.get_or_intern(self.node_text(node.child(1).unwrap()));
+                let e = self.parse_concrete(node.child(3).unwrap())?;
+                Ok(Expr::Lob(node.range(), x, self.arena.alloc(e)))
+            },
+            Some(ConcreteNode::ForceExpression) => {
+                let e = self.parse_concrete(node.child(1).unwrap())?;
+                Ok(Expr::Force(node.range(), self.arena.alloc(e)))
+            },
+            Some(ConcreteNode::GenExpression) => {
+                let e1 = self.parse_concrete(node.child(0).unwrap())?;
+                let e2 = self.parse_concrete(node.child(2).unwrap())?;
+                Ok(Expr::Gen(node.range(), self.arena.alloc(e1), self.arena.alloc(e2)))
             },
             None => {
                 eprintln!("{:?}", node);
@@ -149,21 +198,60 @@ struct PrettyExpr<'a, 'b, R> {
     expr: &'a Expr<'b, R>,
 }
 
+impl<'a, 'b, R> PrettyExpr<'a, 'b, R> {
+    fn for_expr(&self, other_expr: &'a Expr<'b, R>) -> PrettyExpr<'a, 'b, R> {
+        PrettyExpr { interner: self.interner, expr: other_expr }
+    }
+}
+
 impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self.expr {
-            Expr::Var(_, ref x) => write!(f, "Var({})", self.interner.resolve(*x).unwrap()),
-            Expr::Val(_, ref v) => write!(f, "{:?}", v),
-            Expr::App(_, ref e1, ref e2) => {
-                write!(f, "App({}, ", PrettyExpr { interner: self.interner, expr: e1 })?;
-                write!(f, "{})", PrettyExpr { interner: self.interner, expr: e2 })
+            Expr::Var(_, x) =>
+                write!(f, "Var({})", self.interner.resolve(x).unwrap()),
+            Expr::Val(_, ref v) =>
+                write!(f, "{:?}", v),
+            Expr::App(_, ref e1, ref e2) =>
+                write!(f, "App({}, {})", self.for_expr(e1), self.for_expr(e2))
+            ,
+            Expr::Lam(_, x, ref e) => {
+                let x_str = self.interner.resolve(x).unwrap();
+                write!(f, "Lam({}, {})", x_str, self.for_expr(e))
             },
-            Expr::Lam(_, ref x, ref e) => {
-                let x_str = self.interner.resolve(*x).unwrap();
-                write!(f, "Lam({}, {})", x_str, PrettyExpr { interner: self.interner, expr: e })
-            }
+            Expr::Force(_, ref e) =>
+                write!(f, "Force({})", self.for_expr(e)),
+            Expr::Lob(_, x, ref e) => {
+                let x_str = self.interner.resolve(x).unwrap();
+                write!(f, "Lob({}, {})", x_str, self.for_expr(e))
+            },
+            Expr::Gen(_, ref eh, ref et) =>
+                write!(f, "Gen({}, {})", self.for_expr(eh), self.for_expr(et)),
         }
     }
+}
+
+fn get_samples<'a>(mut expr: &'a Expr<'a, ()>, out: &mut [f32]) -> Result<(), String> {
+    let mut env = Env::new();
+    for (i, s_out) in out.iter_mut().enumerate() {
+        match interp(&env, expr) {
+            Ok(Value::Gen(new_env, head, next_expr)) => {
+                if let Value::Sample(s) = *head {
+                    env = new_env;
+                    *s_out = s;
+                    expr = next_expr;
+                } else {
+                    return Err(format!("on index {i}, evaluation succeeded with a Gen but got head {head:?}"));
+                }
+            },
+            Ok(v) => {
+                return Err(format!("on index {i}, evaluation succeeded but got {v:?}"));
+            },
+            Err(e) => {
+                return Err(format!("on index {i}, evaluation failed with error {e:?}"));
+            },
+        }
+    }
+    Ok(())
 }
 
 fn main() {
@@ -172,35 +260,34 @@ fn main() {
     let node_id_matcher = ConcreteNodeMatcher::new(&lang);
     parser.set_language(lang).expect("Error loading lambda listen grammar");
 
-    let source_code = r"(\x. x 4321) (\y. y)";
+    let source_code = r"(&s. \x. x :: 2.4 :: !s 0.0) 5.3";
     let tree = parser.parse(source_code, None).unwrap();
     let root_node = tree.root_node();
 
     println!("\n{:?}", node_id_matcher.node_id_table);
 
     let annot_arena = Arena::new();
+    let mut interner = StringInterner::new();
     let mut abs_context = AbstractionContext {
         original_text: source_code,
         node_matcher: node_id_matcher,
-        interner: StringInterner::new(),
+        interner: &mut interner,
         arena: &annot_arena
     };
 
     println!("\n{:?}", tree);
     println!("\n{:?}", root_node.kind_id());
 
-    let expr = match abs_context.parse_concrete(root_node) {
-        Ok(e) => {
-            println!("\n{}", PrettyExpr { interner: &abs_context.interner, expr: &e });
-            e
-        },
-        Err(e) => {
-            println!("\nerror: {}", e);
-            return;
-        },
-    };
+    let expr = abs_context.parse_concrete(root_node).unwrap();
+    drop(abs_context);
+    println!("\n{}", PrettyExpr { interner: &interner, expr: &expr });
 
     let arena = Arena::new();
     let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
-    println!("{:?}", interp(&HashMap::new(), &expr_unannotated));
+
+    // println!("{:?}", interp(&Env::new(), &expr_unannotated));
+
+    let mut samples = [0f32; 8];
+    println!("\n{:?}", get_samples(&expr_unannotated, &mut samples[..]));
+    println!("{samples:?}");
 }
