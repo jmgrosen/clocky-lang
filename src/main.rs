@@ -1,46 +1,47 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::fmt;
 
 use string_interner::{StringInterner, DefaultSymbol, DefaultStringInterner};
 
+use typed_arena::Arena;
+
 type Symbol = DefaultSymbol;
 
 #[derive(Debug, Clone)]
-enum Value {
+enum Value<'a> {
     Sample(f32),
     Index(usize),
-    Gen(Env, Rc<Expr<()>>, Rc<Expr<()>>),
-    Closure(Env, Symbol, Rc<Expr<()>>),
+    Gen(Env<'a>, &'a Expr<'a, ()>, &'a Expr<'a, ()>),
+    Closure(Env<'a>, Symbol, &'a Expr<'a, ()>),
 }
 
-type Env = HashMap<Symbol, Value>;
+type Env<'a> = HashMap<Symbol, Value<'a>>;
 
 #[derive(Debug, Clone)]
-enum Expr<R> {
+enum Expr<'a, R> {
     Var(R, Symbol),
-    Val(R, Value),
-    Lam(R, Symbol, Rc<Expr<R>>),
-    App(R, Rc<Expr<R>>, Rc<Expr<R>>),
+    Val(R, Value<'a>),
+    Lam(R, Symbol, &'a Expr<'a, R>),
+    App(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
 }
 
-impl<R> Expr<R> {
-    fn map_ext<U>(&self, f: &dyn Fn(&R) -> U) -> Expr<U> {
+impl<'a, R> Expr<'a, R> {
+    fn map_ext<'b, U>(&self, arena: &'b Arena<Expr<'b, U>>, f: &dyn Fn(&R) -> U) -> Expr<'b, U> where 'a: 'b {
         match *self {
             Expr::Var(ref r, ref s) => Expr::Var(f(r), s.clone()),
             Expr::Val(ref r, ref v) => Expr::Val(f(r), v.clone()),
-            Expr::Lam(ref r, ref s, ref e) => Expr::Lam(f(r), s.clone(), Rc::new(e.map_ext(f))),
-            Expr::App(ref r, ref e1, ref e2) => Expr::App(f(r), Rc::new(e1.map_ext(f)), Rc::new(e2.map_ext(f))),
+            Expr::Lam(ref r, ref s, ref e) => Expr::Lam(f(r), s.clone(), arena.alloc(e.map_ext(arena, f))),
+            Expr::App(ref r, ref e1, ref e2) => Expr::App(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
         }
     }
 }
         
 
-fn interp(env: &Env, expr: &Expr<()>) -> Result<Value, &'static str> {
+fn interp<'a>(env: &Env<'a>, expr: &Expr<'a, ()>) -> Result<Value<'a>, &'static str> {
     match *expr {
         Expr::Var(_, ref x) => Ok(env.get(x).ok_or("where's the var")?.clone()),
         Expr::Val(_, ref v) => Ok(v.clone()),
-        Expr::Lam(_, ref x, ref e) => Ok(Value::Closure(env.clone(), x.clone(), e.clone())),
+        Expr::Lam(_, ref x, ref e) => Ok(Value::Closure(env.clone(), x.clone(), *e)),
         Expr::App(_, ref e1, ref e2) => {
             let v1 = interp(env, &*e1)?;
             let Value::Closure(env1, x, ebody) = v1 else {
@@ -94,19 +95,20 @@ make_node_enum!(ConcreteNode {
     LambdaExpression: lambda_expression
 } with matcher ConcreteNodeMatcher);
 
-struct AbstractionContext<'a> {
+struct AbstractionContext<'a, 'b> {
     original_text: &'a str,
     node_matcher: ConcreteNodeMatcher,
     interner: DefaultStringInterner,
+    arena: &'b Arena<Expr<'b, tree_sitter::Range>>,
 }
 
-impl<'a> AbstractionContext<'a> {
-    fn node_text<'b>(&self, node: tree_sitter::Node<'b>) -> &'a str {
+impl<'a, 'b> AbstractionContext<'a, 'b> {
+    fn node_text<'c>(&self, node: tree_sitter::Node<'c>) -> &'a str {
         // utf8_text must return Ok because it is fetching from a &str, which must be utf8
         node.utf8_text(self.original_text.as_bytes()).unwrap()
     }
 
-    fn parse_concrete<'b>(&mut self, node: tree_sitter::Node<'b>) -> Result<Expr<tree_sitter::Range>, String> {
+    fn parse_concrete<'c>(&mut self, node: tree_sitter::Node<'c>) -> Result<Expr<'b, tree_sitter::Range>, String> {
         // TODO: use a TreeCursor instead
         match self.node_matcher.lookup(node.kind_id()) {
             Some(ConcreteNode::SourceFile) =>
@@ -127,12 +129,12 @@ impl<'a> AbstractionContext<'a> {
             Some(ConcreteNode::ApplicationExpression) => {
                 let e1 = self.parse_concrete(node.child(0).unwrap())?;
                 let e2 = self.parse_concrete(node.child(1).unwrap())?;
-                Ok(Expr::App(node.range(), e1.into(), e2.into()))
+                Ok(Expr::App(node.range(), self.arena.alloc(e1), self.arena.alloc(e2)))
             },
             Some(ConcreteNode::LambdaExpression) => {
                 let x = self.interner.get_or_intern(self.node_text(node.child(1).unwrap()));
                 let e = self.parse_concrete(node.child(3).unwrap())?;
-                Ok(Expr::Lam(node.range(), x, e.into()))
+                Ok(Expr::Lam(node.range(), x, self.arena.alloc(e)))
             },
             None => {
                 eprintln!("{:?}", node);
@@ -142,12 +144,12 @@ impl<'a> AbstractionContext<'a> {
     }
 }
 
-struct PrettyExpr<'a, R> {
+struct PrettyExpr<'a, 'b, R> {
     interner: &'a DefaultStringInterner,
-    expr: &'a Expr<R>,
+    expr: &'a Expr<'b, R>,
 }
 
-impl<'a, R> fmt::Display for PrettyExpr<'a, R> {
+impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self.expr {
             Expr::Var(_, ref x) => write!(f, "Var({})", self.interner.resolve(*x).unwrap()),
@@ -165,13 +167,6 @@ impl<'a, R> fmt::Display for PrettyExpr<'a, R> {
 }
 
 fn main() {
-    let mut interner = StringInterner::default();
-    let x = interner.get_or_intern("x");
-    let e = Expr::App((), Rc::new(Expr::Lam((), x, Rc::new(Expr::Var((), x)))), Rc::new(Expr::Val((), Value::Sample(2.0))));
-    println!("{:?}", e);
-    println!("{:?}", interp(&HashMap::new(), &e));
-
-
     let mut parser = tree_sitter::Parser::new();
     let lang = tree_sitter_lambdalisten::language();
     let node_id_matcher = ConcreteNodeMatcher::new(&lang);
@@ -183,10 +178,12 @@ fn main() {
 
     println!("\n{:?}", node_id_matcher.node_id_table);
 
+    let annot_arena = Arena::new();
     let mut abs_context = AbstractionContext {
         original_text: source_code,
         node_matcher: node_id_matcher,
-        interner
+        interner: StringInterner::new(),
+        arena: &annot_arena
     };
 
     println!("\n{:?}", tree);
@@ -203,6 +200,7 @@ fn main() {
         },
     };
 
-    let expr_unannotated = expr.map_ext(&(|_| ()));
+    let arena = Arena::new();
+    let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
     println!("{:?}", interp(&HashMap::new(), &expr_unannotated));
 }

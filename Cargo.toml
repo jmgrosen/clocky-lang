@@ -12,3 +12,4 @@ cc="*"
 string-interner = "0.15"
 tree-sitter = "0.20"
 tree-sitter-lambdalisten = { path = "tree-sitter-lambdalisten" }
+typed-arena = "2.0.2"
