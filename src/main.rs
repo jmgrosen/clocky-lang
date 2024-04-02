@@ -14,6 +14,7 @@ enum Value<'a> {
     Gen(Env<'a>, Box<Value<'a>>, &'a Expr<'a, ()>),
     Closure(Env<'a>, Symbol, &'a Expr<'a, ()>),
     Suspend(Env<'a>, &'a Expr<'a, ()>),
+    BuiltinPartial(Builtin, Box<[Value<'a>]>),
 }
 
 // TODO: use a better type here... eventually we should resolve symbols and just use de bruijn offsets or similar...
@@ -44,41 +45,133 @@ impl<'a, R> Expr<'a, R> {
         }
     }
 }
-        
 
-fn interp<'a>(env: &Env<'a>, expr: &'a Expr<'a, ()>) -> Result<Value<'a>, &'static str> {
+type BuiltinFn = for<'a> fn(&[Value<'a>]) -> Result<Value<'a>, &'static str>;
+
+#[derive(Clone, Copy, Debug)]
+struct Builtin {
+    n_args: usize,
+    body: BuiltinFn,
+}
+
+impl Builtin {
+    const fn new(n_args: usize, body: BuiltinFn) -> Builtin {
+        Builtin { n_args, body }
+    }
+}
+
+fn builtin_pi<'a>(args: &[Value<'a>]) -> Result<Value<'a>, &'static str> {
+    match args {
+        &[] => Ok(Value::Sample(std::f32::consts::PI)),
+        _ => Err("pi called on something different than zero values"),
+    }
+}
+
+fn builtin_sin<'a>(args: &[Value<'a>]) -> Result<Value<'a>, &'static str> {
+    match args {
+        &[Value::Sample(s)] => Ok(Value::Sample(s.sin())),
+        _ => Err("sin called on something different than one sample"),
+    }
+}
+
+fn builtin_add<'a>(args: &[Value<'a>]) -> Result<Value<'a>, &'static str> {
+    match args {
+        &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 + s2)),
+        _ => Err("add called on something different than two samples"),
+    }
+}
+
+fn builtin_div<'a>(args: &[Value<'a>]) -> Result<Value<'a>, &'static str> {
+    match args {
+        &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 / s2)),
+        _ => Err("div called on something different than two samples"),
+    }
+}
+
+const BUILTINS: &[(&'static str, Builtin)] = &[
+    ("pi", Builtin::new(0, builtin_pi)),
+    ("sin", Builtin::new(1, builtin_sin)),
+    ("add", Builtin::new(2, builtin_add)),
+    ("div", Builtin::new(2, builtin_div)),
+];
+
+fn make_builtins(interner: &mut DefaultStringInterner) -> HashMap<Symbol, Builtin> {
+    BUILTINS.iter().map(|&(name, builtin)| (interner.get_or_intern_static(name), builtin)).collect()
+}
+
+type BuiltinsMap = HashMap<Symbol, Builtin>;
+
+struct InterpretationContext<'a> {
+    builtins: &'a BuiltinsMap,
+    env: Env<'a>,
+}
+
+impl<'a> InterpretationContext<'a> {
+    fn with_env(&self, new_env: Env<'a>) -> InterpretationContext<'a> {
+        InterpretationContext { builtins: self.builtins, env: new_env }
+    }
+}
+
+fn interp<'a>(ctx: &InterpretationContext<'a>, expr: &'a Expr<'a, ()>) -> Result<Value<'a>, &'static str> {
     match *expr {
-        Expr::Var(_, ref x) => Ok(env.get(x).ok_or("where's the var")?.clone()),
-        Expr::Val(_, ref v) => Ok(v.clone()),
-        Expr::Lam(_, ref x, ref e) => Ok(Value::Closure(env.clone(), x.clone(), *e)),
+        Expr::Var(_, ref x) => {
+            if let Some(v) = ctx.env.get(x) {
+                Ok(v.clone())
+            } else if let Some(&builtin) = ctx.builtins.get(x) {
+                if builtin.n_args == 0 {
+                    (builtin.body)(&[])
+                } else {
+                    Ok(Value::BuiltinPartial(builtin, [].into()))
+                }
+            } else {
+                Err("couldn't find the var in locals or builtins")
+            }
+        },
+        Expr::Val(_, ref v) =>
+            Ok(v.clone()),
+        Expr::Lam(_, ref x, ref e) =>
+            Ok(Value::Closure(ctx.env.clone(), x.clone(), *e)),
         Expr::App(_, ref e1, ref e2) => {
-            let v1 = interp(env, &*e1)?;
-            let Value::Closure(env1, x, ebody) = v1 else {
-                return Err("don't call something that's not a closure!!");
-            };
-            let v2 = interp(env, &*e2)?;
-            let mut new_env = env1.clone();
-            new_env.insert(x, v2);
-            // TODO: i don't think rust has TCE and this can't be
-            // TCE'd anyway bc new_env must be deallocated.
-            interp(&new_env, &*ebody)
+            let v1 = interp(ctx, &*e1)?;
+            let v2 = interp(ctx, &*e2)?;
+            match v1 {
+                Value::Closure(env1, x, ebody) => {
+                    let mut new_env = env1.clone();
+                    new_env.insert(x, v2);
+                    // TODO: i don't think rust has TCE and this can't be
+                    // TCE'd anyway bc new_env must be deallocated.
+                    interp(&ctx.with_env(new_env), &*ebody)
+                },
+                Value::BuiltinPartial(builtin, args_so_far) => {
+                    let mut new_args = Vec::with_capacity(args_so_far.len() + 1);
+                    new_args.extend(args_so_far.iter().cloned());
+                    new_args.push(v2);
+                    if builtin.n_args == new_args.len() {
+                        (builtin.body)(&new_args[..])
+                    } else {
+                        Ok(Value::BuiltinPartial(builtin, new_args.into()))
+                    }
+                },
+                _ =>
+                    Err("don't call something that's not a closure!!"),
+            }
         },
         Expr::Force(_, ref e) => {
-            let v = interp(env, &*e)?;
+            let v = interp(ctx, &*e)?;
             let Value::Suspend(env1, ebody) = v else {
                 return Err("don't force something that's not a suspension!!");
             };
-            interp(&env1, &*ebody)
+            interp(&ctx.with_env(env1), &*ebody)
         },
         Expr::Lob(_, s, ref e) => {
-            let susp = Value::Suspend(env.clone(), expr);
-            let mut new_env = env.clone();
+            let susp = Value::Suspend(ctx.env.clone(), expr);
+            let mut new_env = ctx.env.clone();
             new_env.insert(s, susp);
-            interp(&new_env, e)
+            interp(&ctx.with_env(new_env), e)
         },
         Expr::Gen(_, ref eh, ref et) => {
-            let vh = interp(env, eh)?;
-            Ok(Value::Gen(env.clone(), Box::new(vh), et))
+            let vh = interp(ctx, eh)?;
+            Ok(Value::Gen(ctx.env.clone(), Box::new(vh), et))
         },
     }
 }
@@ -230,13 +323,13 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
     }
 }
 
-fn get_samples<'a>(mut expr: &'a Expr<'a, ()>, out: &mut [f32]) -> Result<(), String> {
-    let mut env = Env::new();
+fn get_samples<'a>(builtins: &'a BuiltinsMap, mut expr: &'a Expr<'a, ()>, out: &mut [f32]) -> Result<(), String> {
+    let mut ctx = InterpretationContext { builtins, env: Env::new() };
     for (i, s_out) in out.iter_mut().enumerate() {
-        match interp(&env, expr) {
+        match interp(&ctx, expr) {
             Ok(Value::Gen(new_env, head, next_expr)) => {
                 if let Value::Sample(s) = *head {
-                    env = new_env;
+                    ctx.env = new_env;
                     *s_out = s;
                     expr = next_expr;
                 } else {
@@ -260,7 +353,7 @@ fn main() {
     let node_id_matcher = ConcreteNodeMatcher::new(&lang);
     parser.set_language(lang).expect("Error loading lambda listen grammar");
 
-    let source_code = r"(&s. \x. x :: 2.4 :: !s 0.0) 5.3";
+    let source_code = r"(&s. \x. sin x :: !s (add x (div pi 4.0))) 0.0";
     let tree = parser.parse(source_code, None).unwrap();
     let root_node = tree.root_node();
 
@@ -287,7 +380,9 @@ fn main() {
 
     // println!("{:?}", interp(&Env::new(), &expr_unannotated));
 
+    let builtins = make_builtins(&mut interner);
+
     let mut samples = [0f32; 8];
-    println!("\n{:?}", get_samples(&expr_unannotated, &mut samples[..]));
+    println!("\n{:?}", get_samples(&builtins, &expr_unannotated, &mut samples[..]));
     println!("{samples:?}");
 }
