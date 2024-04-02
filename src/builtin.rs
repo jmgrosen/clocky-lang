@@ -18,40 +18,37 @@ impl Builtin {
     }
 }
 
-fn builtin_pi<'a>(args: &[Value<'a>]) -> Result<Value<'a>, &'static str> {
-    match args {
-        &[] => Ok(Value::Sample(std::f32::consts::PI)),
-        _ => Err("pi called on something different than zero values"),
+macro_rules! builtins {
+    ( $($name:ident [ $nargs:literal ] { $pat:pat => $e:expr }),* ) => {
+        mod builtins {
+            use super::*;
+
+            $(
+                pub fn $name<'a>(args: &[Value<'a>]) -> Result<Value<'a>, &'static str> {
+                    match args {
+                        $pat => $e,
+                        _ => Err(concat!("args passed to ", stringify!($name), " do not match the pattern ", stringify!($pat))),
+                    }
+                }
+            )*
+        }
+        const BUILTINS: &[(&'static str, Builtin)] = &[
+            $(
+                (stringify!($name), Builtin::new($nargs, builtins::$name)),
+            )*
+        ];
     }
 }
 
-fn builtin_sin<'a>(args: &[Value<'a>]) -> Result<Value<'a>, &'static str> {
-    match args {
-        &[Value::Sample(s)] => Ok(Value::Sample(s.sin())),
-        _ => Err("sin called on something different than one sample"),
-    }
-}
-
-fn builtin_add<'a>(args: &[Value<'a>]) -> Result<Value<'a>, &'static str> {
-    match args {
-        &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 + s2)),
-        _ => Err("add called on something different than two samples"),
-    }
-}
-
-fn builtin_div<'a>(args: &[Value<'a>]) -> Result<Value<'a>, &'static str> {
-    match args {
-        &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 / s2)),
-        _ => Err("div called on something different than two samples"),
-    }
-}
-
-const BUILTINS: &[(&'static str, Builtin)] = &[
-    ("pi", Builtin::new(0, builtin_pi)),
-    ("sin", Builtin::new(1, builtin_sin)),
-    ("add", Builtin::new(2, builtin_add)),
-    ("div", Builtin::new(2, builtin_div)),
-];
+builtins!(
+    pi[0] { &[] => Ok(Value::Sample(std::f32::consts::PI)) },
+    sin[1] { &[Value::Sample(s)] => Ok(Value::Sample(s.sin())) },
+    cos[1] { &[Value::Sample(s)] => Ok(Value::Sample(s.cos())) },
+    add[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 + s2)) },
+    sub[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 - s2)) },
+    mul[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 * s2)) },
+    div[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 / s2)) }
+);
 
 pub type BuiltinsMap = HashMap<Symbol, Builtin>;
 
