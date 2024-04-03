@@ -13,7 +13,8 @@ module.exports = grammar({
             $.lambda_expression,
             $.lob_expression,
             $.force_expression,
-            $.gen_expression
+            $.gen_expression,
+            $.let_expression
         ),
 
         wrap_expression: $ => seq('(', $.expression, ')'),    
@@ -32,6 +33,8 @@ module.exports = grammar({
 
         force_expression: $ => prec(2, seq('!', $.expression)),
 
-        gen_expression: $ => prec.right(seq($.expression, '::', $.expression))
+        gen_expression: $ => prec.right(seq($.expression, '::', $.expression)),
+
+        let_expression: $ => prec.left(seq('let', $.identifier, '=', $.expression, 'in', $.expression))
     }
 });

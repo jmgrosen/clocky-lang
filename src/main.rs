@@ -16,7 +16,7 @@ fn main() {
     let mut interner = StringInterner::new();
     let mut parser = Parser::new(&mut interner, &annot_arena);
 
-    let source_code = r"(&s. \x. sin x :: !s (add x (div pi 4.0))) 0.0";
+    let source_code = r"let pifourth = div pi 4.0 in (&s. \x. sin x :: !s (add x pifourth)) 0.0";
 
     let expr = parser.parse(source_code).unwrap();
     println!("\n{}", expr.pretty(&interner));

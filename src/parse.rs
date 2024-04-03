@@ -42,7 +42,8 @@ make_node_enum!(ConcreteNode {
     LambdaExpression: lambda_expression,
     LobExpression: lob_expression,
     ForceExpression: force_expression,
-    GenExpression: gen_expression
+    GenExpression: gen_expression,
+    LetExpression: let_expression
 } with matcher ConcreteNodeMatcher);
 
 pub struct Parser<'a, 'b> {
@@ -132,6 +133,12 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let e1 = self.parse_concrete(node.child(0).unwrap())?;
                 let e2 = self.parse_concrete(node.child(2).unwrap())?;
                 Ok(Expr::Gen(node.range(), self.parser.arena.alloc(e1), self.parser.arena.alloc(e2)))
+            },
+            Some(ConcreteNode::LetExpression) => {
+                let x = self.parser.interner.get_or_intern(self.node_text(node.child(1).unwrap()));
+                let e1 = self.parse_concrete(node.child(3).unwrap())?;
+                let e2 = self.parse_concrete(node.child(5).unwrap())?;
+                Ok(Expr::LetIn(node.range(), x, self.parser.arena.alloc(e1), self.parser.arena.alloc(e2)))
             },
             None => {
                 eprintln!("{:?}", node);

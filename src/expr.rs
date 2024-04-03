@@ -31,6 +31,7 @@ pub enum Expr<'a, R> {
     Force(R, &'a Expr<'a, R>),
     Lob(R, Symbol, &'a Expr<'a, R>),
     Gen(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
+    LetIn(R, Symbol, &'a Expr<'a, R>, &'a Expr<'a, R>),
 }
 
 impl<'a, R> Expr<'a, R> {
@@ -43,6 +44,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::Force(ref r, ref e) => Expr::Force(f(r), arena.alloc(e.map_ext(arena, f))),
             Expr::Lob(ref r, s, ref e) => Expr::Lob(f(r), s, arena.alloc(e.map_ext(arena, f))),
             Expr::Gen(ref r, ref e1, ref e2) => Expr::Gen(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
+            Expr::LetIn(ref r, s, ref e1, ref e2) => Expr::LetIn(f(r), s, arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
         }
     }
 
@@ -84,6 +86,8 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
             },
             Expr::Gen(_, ref eh, ref et) =>
                 write!(f, "Gen({}, {})", self.for_expr(eh), self.for_expr(et)),
+            Expr::LetIn(_, x, e1, e2) =>
+                write!(f, "Let({}, {}, {})", self.interner.resolve(x).unwrap(), self.for_expr(e1), self.for_expr(e2)),
         }
     }
 }
