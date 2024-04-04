@@ -6,6 +6,7 @@ mod expr;
 mod builtin;
 mod parse;
 mod interp;
+mod typing;
 
 use builtin::make_builtins;
 use interp::get_samples;

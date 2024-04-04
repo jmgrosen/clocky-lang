@@ -29,6 +29,8 @@ fn interp<'a>(ctx: &InterpretationContext<'a>, expr: &'a Expr<'a, ()>) -> Result
         },
         Expr::Val(_, ref v) =>
             Ok(v.clone()),
+        Expr::Annotate(_, e, _) =>
+            interp(ctx, e),
         Expr::Lam(_, ref x, ref e) =>
             Ok(Value::Closure(ctx.env.clone(), x.clone(), *e)),
         Expr::App(_, ref e1, ref e2) => {

@@ -5,11 +5,13 @@ use string_interner::{DefaultStringInterner, DefaultSymbol};
 use typed_arena::Arena;
 
 use crate::builtin::Builtin;
+use crate::typing::Type;
 
 pub type Symbol = DefaultSymbol;
 
 #[derive(Debug, Clone)]
 pub enum Value<'a> {
+    Unit,
     Sample(f32),
     Index(usize),
     Gen(Env<'a>, Box<Value<'a>>, &'a Expr<'a, ()>),
@@ -26,6 +28,7 @@ pub type Env<'a> = HashMap<Symbol, Value<'a>>;
 pub enum Expr<'a, R> {
     Var(R, Symbol),
     Val(R, Value<'a>),
+    Annotate(R, &'a Expr<'a, R>, Type),
     Lam(R, Symbol, &'a Expr<'a, R>),
     App(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
     Force(R, &'a Expr<'a, R>),
@@ -39,6 +42,7 @@ impl<'a, R> Expr<'a, R> {
         match *self {
             Expr::Var(ref r, s) => Expr::Var(f(r), s),
             Expr::Val(ref r, ref v) => Expr::Val(f(r), v.clone()),
+            Expr::Annotate(ref r, e, ref ty) => Expr::Annotate(f(r), arena.alloc(e.map_ext(arena, f)), ty.clone()),
             Expr::Lam(ref r, s, ref e) => Expr::Lam(f(r), s, arena.alloc(e.map_ext(arena, f))),
             Expr::App(ref r, ref e1, ref e2) => Expr::App(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
             Expr::Force(ref r, ref e) => Expr::Force(f(r), arena.alloc(e.map_ext(arena, f))),
@@ -71,6 +75,8 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
                 write!(f, "Var({})", self.interner.resolve(x).unwrap()),
             Expr::Val(_, ref v) =>
                 write!(f, "{:?}", v),
+            Expr::Annotate(_, e, ref ty) =>
+                write!(f, "Annotate({}, {:?})", self.for_expr(e), ty),
             Expr::App(_, ref e1, ref e2) =>
                 write!(f, "App({}, {})", self.for_expr(e1), self.for_expr(e2))
             ,
