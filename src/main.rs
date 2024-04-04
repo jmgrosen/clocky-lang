@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use string_interner::StringInterner;
 
 use typed_arena::Arena;
@@ -29,7 +31,11 @@ fn main() {
 
     let builtins = make_builtins(&mut interner);
 
-    let mut samples = [0f32; 8];
-    println!("\n{:?}", get_samples(&builtins, &expr_unannotated, &mut samples[..]));
-    println!("{samples:?}");
+    let mut samples = [0f32; 48000];
+    let before = Instant::now();
+    let result = get_samples(&builtins, &expr_unannotated, &mut samples[..]);
+    let elapsed = before.elapsed();
+    println!("\n{:?}", result);
+    // println!("{samples:?}");
+    println!("took {}ms", elapsed.as_millis());
 }
