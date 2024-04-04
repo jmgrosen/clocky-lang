@@ -46,8 +46,10 @@ make_node_enum!(ConcreteNode {
     LetExpression: let_expression,
     AnnotateExpression: annotate_expression,
     Type: type,
+    WrapType: wrap_type,
     BaseType: base_type,
-    FunctionType: function_type
+    FunctionType: function_type,
+    StreamType: stream_type
 } with matcher ConcreteNodeMatcher);
 
 pub struct Parser<'a, 'b> {
@@ -159,6 +161,8 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             },
             Some(ConcreteNode::Type) |
             Some(ConcreteNode::BaseType) |
+            Some(ConcreteNode::StreamType) |
+            Some(ConcreteNode::WrapType) |
             Some(ConcreteNode::FunctionType) =>
                 Err(ParseError::ExpectedExpression(node)),
             None => 
@@ -171,6 +175,8 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
         match self.parser.node_matcher.lookup(node.kind_id()) {
             Some(ConcreteNode::Type) =>
                 self.parse_type(node.child(0).unwrap()),
+            Some(ConcreteNode::WrapType) =>
+                self.parse_type(node.child(1).unwrap()),
             Some(ConcreteNode::BaseType) =>
                 Ok(match self.node_text(node) {
                     "sample" => Type::Sample,
@@ -182,6 +188,10 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let ty1 = self.parse_type(node.child(0).unwrap())?;
                 let ty2 = self.parse_type(node.child(2).unwrap())?;
                 Ok(Type::Function(Box::new(ty1), Box::new(ty2)))
+            },
+            Some(ConcreteNode::StreamType) => {
+                let ty = self.parse_type(node.child(1).unwrap())?;
+                Ok(Type::Stream(Box::new(ty)))
             },
             Some(_) =>
                 Err(ParseError::ExpectedType(node)),

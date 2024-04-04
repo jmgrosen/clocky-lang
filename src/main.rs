@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{time::Instant, collections::HashMap};
 
 use string_interner::StringInterner;
 
@@ -17,12 +17,21 @@ use parse::Parser;
 fn main() {
     let annot_arena = Arena::new();
     let mut interner = StringInterner::new();
+    let mut ctx: typing::Ctx = HashMap::new();
+    let add = interner.get_or_intern_static("add");
+    let div = interner.get_or_intern_static("div");
+    let pi = interner.get_or_intern_static("pi");
+    let sin = interner.get_or_intern_static("sin");
+    ctx.insert(add, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
+    ctx.insert(div, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
+    ctx.insert(pi, typing::Type::Sample);
+    ctx.insert(sin, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
 
     let mut try_typing = |code| {
         let mut parser = Parser::new(&mut interner, &annot_arena);
         let expr = parser.parse(code).unwrap();
         println!("{}", expr.pretty(&interner));
-        match typing::synthesize(&typing::Ctx::new(), &expr) {
+        match typing::synthesize(&ctx, &expr) {
             Ok(ty) => println!("synthesized type: {:?}", ty),
             Err(err) => println!("type error: {}", err.pretty(&interner, code)),
         }
@@ -37,8 +46,14 @@ fn main() {
     try_typing(r"1.5 2");
     try_typing(r"1.5");
 
+    try_typing(r"(&s. !s) : sample");
+    // try_typing(r"(&f. \x. ");
+    try_typing(r"((&s. ((\x. x :: !s (add x 1.0)) : sample -> ~sample)) : sample -> ~sample) 0.0");
+
+    let source_code = r"let pifourth = div pi 4.0 in ((&s. \x. sin x :: !s (add x pifourth)) : sample -> ~sample) 0.0";
+    try_typing(source_code);
+
     /*
-    let source_code = r"let pifourth = (div pi 4.0 : sample) in (&s. \x. sin x :: !s (add x pifourth)) 0.0";
 
     let expr = parser.parse(source_code).unwrap();
     println!("\n{}", expr.pretty(&interner));

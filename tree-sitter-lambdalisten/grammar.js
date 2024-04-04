@@ -36,14 +36,18 @@ module.exports = grammar({
 
         gen_expression: $ => prec.right(seq($.expression, '::', $.expression)),
 
-        let_expression: $ => prec.left(seq('let', $.identifier, '=', $.expression, 'in', $.expression)),
+        let_expression: $ => prec.left(-1, seq('let', $.identifier, '=', $.expression, 'in', $.expression)),
 
         annotate_expression: $ => seq($.expression, ':', $.type),
 
         type: $ => choice(
+            $.wrap_type,
             $.base_type,
-            $.function_type
+            $.function_type,
+            $.stream_type
         ),
+
+        wrap_type: $ => seq('(', $.type, ')'),
 
         base_type: $ => choice(
             'sample',
@@ -51,6 +55,8 @@ module.exports = grammar({
             'unit'
         ),
 
-        function_type: $ => prec.right(seq($.type, '->', $.type))
+        function_type: $ => prec.right(seq($.type, '->', $.type)),
+
+        stream_type: $ => prec(2, seq('~', $.type))
     }
 });

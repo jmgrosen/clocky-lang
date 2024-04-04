@@ -26,6 +26,7 @@ pub enum TypeError<'a, R> {
     NonFunctionApplication { range: R, purported_fun: &'a Expr<'a, R>, actual_type: Type },
     Unsupported { expr: &'a Expr<'a, R> },
     BadAnnotation { range: R, expr: &'a Expr<'a, R>, purported_type: Type, err: Box<TypeError<'a, R>> },
+    LetFailure { range: R, var: Symbol, expr: &'a Expr<'a, R>, err: Box<TypeError<'a, R>> },
 }
 
 impl<'a, R> TypeError<'a, R> {
@@ -51,6 +52,10 @@ impl<'a, R> TypeError<'a, R> {
 
     fn bad_annotation(range: R, expr: &'a Expr<'a, R>, purported_type: Type, err: TypeError<'a, R>) -> TypeError<'a, R> {
         TypeError::BadAnnotation { range, expr, purported_type, err: Box::new(err) }
+    }
+
+    fn let_failure(range: R, var: Symbol, expr: &'a Expr<'a, R>, err: TypeError<'a, R>) -> TypeError<'a, R> {
+        TypeError::LetFailure { range, var, expr, err: Box::new(err) }
     }
 
     pub fn pretty(&'a self, interner: &'a DefaultStringInterner, program_text: &'a str) -> PrettyTypeError<'a, R> {
@@ -91,6 +96,9 @@ impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
                 write!(f, "oops haven't implemented typing rules for {} yet", self.for_expr(expr)),
             TypeError::BadAnnotation { expr, ref purported_type, ref err, .. } =>
                 write!(f, "bad annotation of expression {} as type {:?}: {}", self.for_expr(expr), purported_type, self.for_error(err)),
+            TypeError::LetFailure { var, expr, ref err, .. } =>
+                write!(f, "couldn't infer the type of variable {} from definition {}: {}",
+                       self.interner.resolve(var).unwrap(), self.for_expr(expr), self.for_error(err))
         }
     }
 }
@@ -104,6 +112,28 @@ pub fn check<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Resul
             new_ctx.insert(x, (**ty1).clone());
             check(&new_ctx, e, ty2)
         },
+        (_, &Expr::Lob(_, x, e)) => {
+            let mut new_ctx = ctx.clone();
+            new_ctx.insert(x, Type::Later(Box::new(ty.clone())));
+            check(&new_ctx, e, ty)
+        },
+        // if we think of streams as infinitary products, it makes sense to *check* their introduction, right?
+        (&Type::Stream(ref ty1), &Expr::Gen(_, eh, et)) => {
+            // TODO: probably change once we figure out the stream semantics we actually want
+            check(&ctx, eh, ty1)?;
+            check(&ctx, et, ty)
+        },
+        (_, &Expr::LetIn(ref r, x, e1, e2)) =>
+            // TODO: add a synthesizing rule for this too?
+            match synthesize(ctx, e1) {
+                Ok(ty_x) => {
+                    let mut new_ctx = ctx.clone();
+                    new_ctx.insert(x, ty_x);
+                    check(&new_ctx, e2, ty)
+                },
+                Err(err) =>
+                    Err(TypeError::let_failure(r.clone(), x, e1, err)),
+            },
         (_, _) => {
             let synthesized = synthesize(ctx, expr)?;
             if synthesized == *ty {
@@ -145,6 +175,23 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
                 },
                 ty =>
                     Err(TypeError::non_function_application(r.clone(), e1, ty)),
+            },
+        &Expr::Force(ref r, e1) =>
+            match synthesize(ctx, e1)? {
+                Type::Later(ty) => Ok(*ty),
+                // TODO: add error here
+                ty => unimplemented!()
+            },
+        &Expr::LetIn(ref r, x, e1, e2) =>
+            // TODO: add a synthesizing rule for this too?
+            match synthesize(ctx, e1) {
+                Ok(ty_x) => {
+                    let mut new_ctx = ctx.clone();
+                    new_ctx.insert(x, ty_x);
+                    synthesize(&new_ctx, e2)
+                },
+                Err(err) =>
+                    Err(TypeError::let_failure(r.clone(), x, e1, err)),
             },
         _ =>
             Err(TypeError::unsupported(expr)),
