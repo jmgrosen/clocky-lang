@@ -14,7 +14,8 @@ module.exports = grammar({
             $.lob_expression,
             $.force_expression,
             $.gen_expression,
-            $.let_expression
+            $.let_expression,
+            $.annotate_expression
         ),
 
         wrap_expression: $ => seq('(', $.expression, ')'),    
@@ -35,6 +36,21 @@ module.exports = grammar({
 
         gen_expression: $ => prec.right(seq($.expression, '::', $.expression)),
 
-        let_expression: $ => prec.left(seq('let', $.identifier, '=', $.expression, 'in', $.expression))
+        let_expression: $ => prec.left(seq('let', $.identifier, '=', $.expression, 'in', $.expression)),
+
+        annotate_expression: $ => seq($.expression, ':', $.type),
+
+        type: $ => choice(
+            $.base_type,
+            $.function_type
+        ),
+
+        base_type: $ => choice(
+            'sample',
+            'index',
+            'unit'
+        ),
+
+        function_type: $ => prec.right(seq($.type, '->', $.type))
     }
 });

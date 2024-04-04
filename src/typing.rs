@@ -1,6 +1,9 @@
+use core::fmt;
 use std::collections::HashMap;
 
-use crate::expr::{Symbol, Expr, Value};
+use string_interner::{StringInterner, DefaultStringInterner};
+
+use crate::expr::{Symbol, Expr, Value, PrettyExpr};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Type {
@@ -13,14 +16,14 @@ pub enum Type {
     Later(Box<Type>),
 }
 
-type Ctx = HashMap<Symbol, Type>;
+pub type Ctx = HashMap<Symbol, Type>;
 
 #[derive(Debug)]
 pub enum TypeError<'a, R> {
     MismatchingTypes { expr: &'a Expr<'a, R>, synth: Type, expected: Type },
     VariableNotFound { range: R, var: Symbol },
-    BadArgument { range: R, fun: &'a Expr<'a, R>, arg: &'a Expr<'a, R>, arg_err: Box<TypeError<'a, R>> },
-    BadApplication { range: R, purported_fun: &'a Expr<'a, R>, actual_type: Type },
+    BadArgument { range: R, arg_type: Type, fun: &'a Expr<'a, R>, arg: &'a Expr<'a, R>, arg_err: Box<TypeError<'a, R>> },
+    NonFunctionApplication { range: R, purported_fun: &'a Expr<'a, R>, actual_type: Type },
     Unsupported { expr: &'a Expr<'a, R> },
     BadAnnotation { range: R, expr: &'a Expr<'a, R>, purported_type: Type, err: Box<TypeError<'a, R>> },
 }
@@ -34,12 +37,12 @@ impl<'a, R> TypeError<'a, R> {
         TypeError::VariableNotFound { range, var }
     }
 
-    fn bad_argument(range: R, fun: &'a Expr<'a, R>, arg: &'a Expr<'a, R>, arg_err: TypeError<'a, R>) -> TypeError<'a, R> {
-        TypeError::BadArgument { range, fun, arg, arg_err: Box::new(arg_err) }
+    fn bad_argument(range: R, arg_type: Type, fun: &'a Expr<'a, R>, arg: &'a Expr<'a, R>, arg_err: TypeError<'a, R>) -> TypeError<'a, R> {
+        TypeError::BadArgument { range, arg_type, fun, arg, arg_err: Box::new(arg_err) }
     }
 
-    fn bad_application(range: R, purported_fun: &'a Expr<'a, R>, actual_type: Type) -> TypeError<'a, R> {
-        TypeError::BadApplication { range, purported_fun, actual_type }
+    fn non_function_application(range: R, purported_fun: &'a Expr<'a, R>, actual_type: Type) -> TypeError<'a, R> {
+        TypeError::NonFunctionApplication { range, purported_fun, actual_type }
     }
 
     fn unsupported(expr: &'a Expr<'a, R>) -> TypeError<'a, R> {
@@ -48,6 +51,47 @@ impl<'a, R> TypeError<'a, R> {
 
     fn bad_annotation(range: R, expr: &'a Expr<'a, R>, purported_type: Type, err: TypeError<'a, R>) -> TypeError<'a, R> {
         TypeError::BadAnnotation { range, expr, purported_type, err: Box::new(err) }
+    }
+
+    pub fn pretty(&'a self, interner: &'a DefaultStringInterner, program_text: &'a str) -> PrettyTypeError<'a, R> {
+        PrettyTypeError { interner, program_text, error: self }
+    }
+}
+
+pub struct PrettyTypeError<'a, R> {
+    interner: &'a DefaultStringInterner,
+    program_text: &'a str,
+    error: &'a TypeError<'a, R>,
+}
+
+impl<'a, R> PrettyTypeError<'a, R> {
+    fn for_error(&self, error: &'a TypeError<'a, R>) -> PrettyTypeError<'a, R> {
+        PrettyTypeError { interner: self.interner, program_text: self.program_text, error }
+    }
+
+    fn for_expr(&self, expr: &'a Expr<'a, R>) -> PrettyExpr<'a, 'a, R> {
+        expr.pretty(self.interner)
+    }
+}
+
+impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self.error {
+            TypeError::MismatchingTypes { expr, ref synth, ref expected } =>
+                write!(f, "found {} to have type {:?} but expected {:?}", self.for_expr(expr), synth, expected),
+            TypeError::VariableNotFound { var, .. } =>
+                write!(f, "variable \"{}\" not found", self.interner.resolve(var).unwrap()),
+            TypeError::BadArgument { ref arg_type, fun, arg, ref arg_err, .. } =>
+                write!(f, "found {} to take argument type {:?}, but argument {} does not have that type: {}",
+                       self.for_expr(fun), arg_type, self.for_expr(arg), self.for_error(arg_err)),
+            TypeError::NonFunctionApplication { purported_fun, ref actual_type, .. } =>
+                write!(f, "trying to call {}, but found it to have type {:?}, which is not a function type",
+                       self.for_expr(purported_fun), actual_type),
+            TypeError::Unsupported { expr } =>
+                write!(f, "oops haven't implemented typing rules for {} yet", self.for_expr(expr)),
+            TypeError::BadAnnotation { expr, ref purported_type, ref err, .. } =>
+                write!(f, "bad annotation of expression {} as type {:?}: {}", self.for_expr(expr), purported_type, self.for_error(err)),
+        }
     }
 }
 
@@ -73,6 +117,17 @@ pub fn check<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Resul
 
 pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type, TypeError<'a, R>> {
     match expr {
+        &Expr::Val(ref r, ref v) =>
+            match *v {
+                Value::Unit => Ok(Type::Unit),
+                Value::Sample(_) => Ok(Type::Sample),
+                Value::Index(_) => Ok(Type::Index),
+                Value::Gen(_, _, _) |
+                Value::Closure(_, _, _) |
+                Value::Suspend(_, _) |
+                Value::BuiltinPartial(_, _) =>
+                    panic!("trying to type {v:?} but that kind of value shouldn't be created yet?"),
+            }
         &Expr::Var(ref r, x) =>
             ctx.get(&x).cloned().ok_or_else(|| TypeError::var_not_found(r.clone(), x)),
         &Expr::Annotate(ref r, e, ref ty) =>
@@ -83,13 +138,13 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
         &Expr::App(ref r, e1, e2) =>
             match synthesize(ctx, e1)? {
                 Type::Function(ty_a, ty_b) => {
-                    match check(ctx, e1, &ty_a) {
+                    match check(ctx, e2, &ty_a) {
                         Ok(()) => Ok(*ty_b),
-                        Err(arg_err) => Err(TypeError::bad_argument(r.clone(), e1, e2, arg_err)),
+                        Err(arg_err) => Err(TypeError::bad_argument(r.clone(), *ty_a, e1, e2, arg_err)),
                     }
                 },
                 ty =>
-                    Err(TypeError::bad_application(r.clone(), e1, ty)),
+                    Err(TypeError::non_function_application(r.clone(), e1, ty)),
             },
         _ =>
             Err(TypeError::unsupported(expr)),
