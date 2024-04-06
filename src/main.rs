@@ -14,7 +14,7 @@ use builtin::make_builtins;
 use interp::get_samples;
 use parse::Parser;
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let annot_arena = Arena::new();
     let mut interner = StringInterner::new();
     let mut ctx: typing::Ctx = HashMap::new();
@@ -27,17 +27,32 @@ fn main() {
     ctx.insert(pi, typing::Type::Sample);
     ctx.insert(sin, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
 
-    let mut try_typing = |code| {
+    // don't ask why i have to use a String here instead of &str
+    let mut try_typing = |code: String| {
         let mut parser = Parser::new(&mut interner, &annot_arena);
-        let expr = parser.parse(code).unwrap();
+        let expr = match parser.parse(&code[..]) {
+            Ok(e) => e,
+            Err(err) => {
+                println!("parse error: {:?}", err);
+                return;
+            },
+        };
         println!("{}", expr.pretty(&interner));
         match typing::synthesize(&ctx, &expr) {
             Ok(ty) => println!("synthesized type: {:?}", ty),
-            Err(err) => println!("type error: {}", err.pretty(&interner, code)),
+            Err(err) => println!("type error: {}", err.pretty(&interner, &code[..])),
         }
-        println!("");
     };
 
+    for line in std::io::stdin().lines() {
+        let line = line?;
+        try_typing(line);
+        // println!("{}", line);
+    }
+
+    Ok(())
+
+    /*
     try_typing(r"(\x. x) : index -> unit");
     try_typing(r"(\x. x) : sample -> sample");
     try_typing(r"(\x. y) : sample -> sample");
@@ -52,6 +67,9 @@ fn main() {
 
     let source_code = r"let pifourth = div pi 4.0 in ((&s. \x. sin x :: !s (add x pifourth)) : sample -> ~sample) 0.0";
     try_typing(source_code);
+
+    try_typing(r"let foo = ((2.0, 3) : sample * index) in (let (x, y) = foo in x)");
+    */
 
     /*
 

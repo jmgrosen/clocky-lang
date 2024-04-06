@@ -13,6 +13,7 @@ pub enum Type {
     Stream(Box<Type>),
     Function(Box<Type>, Box<Type>),
     Product(Box<Type>, Box<Type>),
+    Sum(Box<Type>, Box<Type>),
     Later(Box<Type>),
 }
 
@@ -27,6 +28,10 @@ pub enum TypeError<'a, R> {
     Unsupported { expr: &'a Expr<'a, R> },
     BadAnnotation { range: R, expr: &'a Expr<'a, R>, purported_type: Type, err: Box<TypeError<'a, R>> },
     LetFailure { range: R, var: Symbol, expr: &'a Expr<'a, R>, err: Box<TypeError<'a, R>> },
+    ForcingNonThunk { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
+    UnPairingNonProduct { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
+    CasingNonSum { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
+    CouldNotUnify { type1: Type, type2: Type },
 }
 
 impl<'a, R> TypeError<'a, R> {
@@ -56,6 +61,22 @@ impl<'a, R> TypeError<'a, R> {
 
     fn let_failure(range: R, var: Symbol, expr: &'a Expr<'a, R>, err: TypeError<'a, R>) -> TypeError<'a, R> {
         TypeError::LetFailure { range, var, expr, err: Box::new(err) }
+    }
+
+    fn forcing_non_thunk(range: R, expr: &'a Expr<'a, R>, actual_type: Type) -> TypeError<'a, R> {
+        TypeError::ForcingNonThunk { range, expr, actual_type }
+    }
+
+    fn unpairing_non_product(range: R, expr: &'a Expr<'a, R>, actual_type: Type) -> TypeError<'a, R> {
+        TypeError::UnPairingNonProduct { range, expr, actual_type }
+    }
+
+    fn casing_non_sum(range: R, expr: &'a Expr<'a, R>, actual_type: Type) -> TypeError<'a, R> {
+        TypeError::CasingNonSum { range, expr, actual_type }
+    }
+
+    fn could_not_unify(type1: Type, type2: Type) -> TypeError<'a, R> {
+        TypeError::CouldNotUnify { type1, type2 }
     }
 
     pub fn pretty(&'a self, interner: &'a DefaultStringInterner, program_text: &'a str) -> PrettyTypeError<'a, R> {
@@ -98,7 +119,15 @@ impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
                 write!(f, "bad annotation of expression {} as type {:?}: {}", self.for_expr(expr), purported_type, self.for_error(err)),
             TypeError::LetFailure { var, expr, ref err, .. } =>
                 write!(f, "couldn't infer the type of variable {} from definition {}: {}",
-                       self.interner.resolve(var).unwrap(), self.for_expr(expr), self.for_error(err))
+                       self.interner.resolve(var).unwrap(), self.for_expr(expr), self.for_error(err)),
+            TypeError::ForcingNonThunk { expr, ref actual_type, .. } =>
+                write!(f, "tried to force expression {} of type {:?}, which is not a thunk", self.for_expr(expr), actual_type),
+            TypeError::UnPairingNonProduct { expr, ref actual_type, .. } =>
+                write!(f, "tried to unpair expression {} of type {:?}, which is not a product", self.for_expr(expr), actual_type),
+            TypeError::CasingNonSum { expr, ref actual_type, .. } =>
+                write!(f, "tried to case on expression {} of type {:?}, which is not a sum", self.for_expr(expr), actual_type),
+            TypeError::CouldNotUnify { ref type1, ref type2 } =>
+                write!(f, "could not unify types {:?} and {:?}", type1, type2),
         }
     }
 }
@@ -124,7 +153,6 @@ pub fn check<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Resul
             check(&ctx, et, ty)
         },
         (_, &Expr::LetIn(ref r, x, e1, e2)) =>
-            // TODO: add a synthesizing rule for this too?
             match synthesize(ctx, e1) {
                 Ok(ty_x) => {
                     let mut new_ctx = ctx.clone();
@@ -133,6 +161,38 @@ pub fn check<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Resul
                 },
                 Err(err) =>
                     Err(TypeError::let_failure(r.clone(), x, e1, err)),
+            },
+        (&Type::Product(ref ty1, ref ty2), &Expr::Pair(_, e1, e2)) => {
+            check(ctx, e1, ty1)?;
+            check(ctx, e2, ty2)
+        },
+        (_, &Expr::UnPair(ref r, x1, x2, e0, e)) =>
+            match synthesize(ctx, e0)? {
+                Type::Product(ty1, ty2) => {
+                    let mut new_ctx = ctx.clone();
+                    new_ctx.insert(x1, *ty1);
+                    new_ctx.insert(x2, *ty2);
+                    check(&new_ctx, e, ty)
+                },
+                ty =>
+                    Err(TypeError::unpairing_non_product(r.clone(), e0, ty)),
+            },
+        (&Type::Sum(ref ty1, _), &Expr::InL(_, e)) =>
+            check(ctx, e, ty1),
+        (&Type::Sum(_, ref ty2), &Expr::InR(_, e)) =>
+            check(ctx, e, ty2),
+        (_, &Expr::Case(ref r, e0, x1, e1, x2, e2)) =>
+            match synthesize(ctx, e0)? {
+                Type::Sum(ty1, ty2) => {
+                    let mut ctx1 = ctx.clone();
+                    ctx1.insert(x1, *ty1);
+                    check(&ctx1, e1, ty)?;
+                    let mut ctx2 = ctx.clone();
+                    ctx2.insert(x2, *ty2);
+                    check(&ctx2, e2, ty)
+                },
+                ty =>
+                    Err(TypeError::casing_non_sum(r.clone(), e0, ty)),
             },
         (_, _) => {
             let synthesized = synthesize(ctx, expr)?;
@@ -147,7 +207,7 @@ pub fn check<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Resul
 
 pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type, TypeError<'a, R>> {
     match expr {
-        &Expr::Val(ref r, ref v) =>
+        &Expr::Val(_, ref v) =>
             match *v {
                 Value::Unit => Ok(Type::Unit),
                 Value::Sample(_) => Ok(Type::Sample),
@@ -155,6 +215,9 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
                 Value::Gen(_, _, _) |
                 Value::Closure(_, _, _) |
                 Value::Suspend(_, _) |
+                Value::Pair(_, _) |
+                Value::InL(_) |
+                Value::InR(_) |
                 Value::BuiltinPartial(_, _) =>
                     panic!("trying to type {v:?} but that kind of value shouldn't be created yet?"),
             }
@@ -180,10 +243,9 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
             match synthesize(ctx, e1)? {
                 Type::Later(ty) => Ok(*ty),
                 // TODO: add error here
-                ty => unimplemented!()
+                ty => Err(TypeError::forcing_non_thunk(r.clone(), e1, ty)),
             },
         &Expr::LetIn(ref r, x, e1, e2) =>
-            // TODO: add a synthesizing rule for this too?
             match synthesize(ctx, e1) {
                 Ok(ty_x) => {
                     let mut new_ctx = ctx.clone();
@@ -193,8 +255,43 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
                 Err(err) =>
                     Err(TypeError::let_failure(r.clone(), x, e1, err)),
             },
+        &Expr::UnPair(ref r, x1, x2, e0, e) =>
+            match synthesize(ctx, e0)? {
+                Type::Product(ty1, ty2) => {
+                    let mut new_ctx = ctx.clone();
+                    new_ctx.insert(x1, *ty1);
+                    new_ctx.insert(x2, *ty2);
+                    synthesize(&new_ctx, e)
+                },
+                ty =>
+                    Err(TypeError::unpairing_non_product(r.clone(), e0, ty)),
+            }
+        &Expr::Case(ref r, e0, x1, e1, x2, e2) =>
+            match synthesize(ctx, e0)? {
+                Type::Sum(ty1, ty2) => {
+                    let mut ctx1 = ctx.clone();
+                    ctx1.insert(x1, *ty1);
+                    let ty_out1 = synthesize(&ctx1, e1)?;
+
+                    let mut ctx2 = ctx.clone();
+                    ctx2.insert(x2, *ty2);
+                    let ty_out2 = synthesize(&ctx2, e2)?;
+
+                    meet(ty_out1, ty_out2)
+                },
+                ty =>
+                    Err(TypeError::casing_non_sum(r.clone(), e0, ty)),
+            },
         _ =>
             Err(TypeError::unsupported(expr)),
+    }
+}
+
+fn meet<'a, R>(ty1: Type, ty2: Type) -> Result<Type, TypeError<'a, R>> {
+    if ty1 == ty2 {
+        Ok(ty1)
+    } else {
+        Err(TypeError::could_not_unify(ty1, ty2))
     }
 }
 

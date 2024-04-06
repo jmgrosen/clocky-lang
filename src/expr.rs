@@ -14,6 +14,9 @@ pub enum Value<'a> {
     Unit,
     Sample(f32),
     Index(usize),
+    Pair(Box<Value<'a>>, Box<Value<'a>>),
+    InL(Box<Value<'a>>),
+    InR(Box<Value<'a>>),
     Gen(Env<'a>, Box<Value<'a>>, &'a Expr<'a, ()>),
     Closure(Env<'a>, Symbol, &'a Expr<'a, ()>),
     Suspend(Env<'a>, &'a Expr<'a, ()>),
@@ -35,6 +38,11 @@ pub enum Expr<'a, R> {
     Lob(R, Symbol, &'a Expr<'a, R>),
     Gen(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
     LetIn(R, Symbol, &'a Expr<'a, R>, &'a Expr<'a, R>),
+    Pair(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
+    UnPair(R, Symbol, Symbol, &'a Expr<'a, R>, &'a Expr<'a, R>),
+    InL(R, &'a Expr<'a, R>),
+    InR(R, &'a Expr<'a, R>),
+    Case(R, &'a Expr<'a, R>, Symbol, &'a Expr<'a, R>, Symbol, &'a Expr<'a, R>),
 }
 
 impl<'a, R> Expr<'a, R> {
@@ -49,6 +57,11 @@ impl<'a, R> Expr<'a, R> {
             Expr::Lob(ref r, s, ref e) => Expr::Lob(f(r), s, arena.alloc(e.map_ext(arena, f))),
             Expr::Gen(ref r, ref e1, ref e2) => Expr::Gen(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
             Expr::LetIn(ref r, s, ref e1, ref e2) => Expr::LetIn(f(r), s, arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
+            Expr::Pair(ref r, e1, e2) => Expr::Pair(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
+            Expr::UnPair(ref r, s1, s2, e1, e2) => Expr::UnPair(f(r), s1, s2, arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
+            Expr::InL(ref r, e) => Expr::InL(f(r), arena.alloc(e.map_ext(arena, f))),
+            Expr::InR(ref r, e) => Expr::InR(f(r), arena.alloc(e.map_ext(arena, f))),
+            Expr::Case(ref r, e0, s1, e1, s2, e2) => Expr::Case(f(r), arena.alloc(e0.map_ext(arena, f)), s1, arena.alloc(e1.map_ext(arena, f)), s2, arena.alloc(e2.map_ext(arena, f))),
         }
     }
 
@@ -68,32 +81,43 @@ impl<'a, 'b, R> PrettyExpr<'a, 'b, R> {
     }
 }
 
+impl<'a, 'b, R> PrettyExpr<'a, 'b, R> {
+    fn name(&self, s: Symbol) -> &'a str {
+        self.interner.resolve(s).expect("encountered an symbol not corresponding to an identifier while pretty printing an expression")
+    }
+}
+
 impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self.expr {
             Expr::Var(_, x) =>
-                write!(f, "Var({})", self.interner.resolve(x).unwrap()),
+                write!(f, "Var({})", self.name(x)),
             Expr::Val(_, ref v) =>
                 write!(f, "{:?}", v),
             Expr::Annotate(_, e, ref ty) =>
                 write!(f, "Annotate({}, {:?})", self.for_expr(e), ty),
             Expr::App(_, ref e1, ref e2) =>
-                write!(f, "App({}, {})", self.for_expr(e1), self.for_expr(e2))
-            ,
-            Expr::Lam(_, x, ref e) => {
-                let x_str = self.interner.resolve(x).unwrap();
-                write!(f, "Lam({}, {})", x_str, self.for_expr(e))
-            },
+                write!(f, "App({}, {})", self.for_expr(e1), self.for_expr(e2)),
+            Expr::Lam(_, x, ref e) =>
+                write!(f, "Lam({}, {})", self.name(x), self.for_expr(e)),
             Expr::Force(_, ref e) =>
                 write!(f, "Force({})", self.for_expr(e)),
-            Expr::Lob(_, x, ref e) => {
-                let x_str = self.interner.resolve(x).unwrap();
-                write!(f, "Lob({}, {})", x_str, self.for_expr(e))
-            },
+            Expr::Lob(_, x, ref e) =>
+                write!(f, "Lob({}, {})", self.name(x), self.for_expr(e)),
             Expr::Gen(_, ref eh, ref et) =>
                 write!(f, "Gen({}, {})", self.for_expr(eh), self.for_expr(et)),
             Expr::LetIn(_, x, e1, e2) =>
-                write!(f, "Let({}, {}, {})", self.interner.resolve(x).unwrap(), self.for_expr(e1), self.for_expr(e2)),
+                write!(f, "Let({}, {}, {})", self.name(x), self.for_expr(e1), self.for_expr(e2)),
+            Expr::Pair(_, e1, e2) =>
+                write!(f, "Pair({}, {})", self.for_expr(e1), self.for_expr(e2)),
+            Expr::UnPair(_, x1, x2, e1, e2) =>
+                write!(f, "UnPair({}, {}, {}, {})", self.name(x1), self.name(x2), self.for_expr(e1), self.for_expr(e2)),
+            Expr::InL(_, e) =>
+                write!(f, "InL({})", self.for_expr(e)),
+            Expr::InR(_, e) =>
+                write!(f, "InR({})", self.for_expr(e)),
+            Expr::Case(_, e0, x1, e1, x2, e2) =>
+                write!(f, "Case({}, {}, {}, {}, {})", self.for_expr(e0), self.name(x1), self.for_expr(e1), self.name(x2), self.for_expr(e2)),
         }
     }
 }

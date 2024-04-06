@@ -80,7 +80,40 @@ fn interp<'a>(ctx: &InterpretationContext<'a>, expr: &'a Expr<'a, ()>) -> Result
             let mut new_env = ctx.env.clone();
             new_env.insert(x, v);
             interp(&ctx.with_env(new_env), e2)
-        }
+        },
+        Expr::Pair(_, e1, e2) => {
+            let v1 = interp(ctx, e1)?;
+            let v2 = interp(ctx, e2)?;
+            Ok(Value::Pair(Box::new(v1), Box::new(v2)))
+        },
+        Expr::UnPair(_, x1, x2, e0, e) => {
+            let Value::Pair(v1, v2) = interp(ctx, e0)? else {
+                return Err("tried to unpair a non-pair!");
+            };
+            let mut new_env = ctx.env.clone();
+            new_env.insert(x1, *v1);
+            new_env.insert(x2, *v2);
+            interp(&ctx.with_env(new_env), e)
+        },
+        Expr::InL(_, e) =>
+            Ok(Value::InL(Box::new(interp(ctx, e)?))),
+        Expr::InR(_, e) =>
+            Ok(Value::InR(Box::new(interp(ctx, e)?))),
+        Expr::Case(_, e0, x1, e1, x2, e2) =>
+            match interp(ctx, e0)? {
+                Value::InL(v) => {
+                    let mut new_env = ctx.env.clone();
+                    new_env.insert(x1, *v);
+                    interp(&ctx.with_env(new_env), e1)
+                },
+                Value::InR(v) => {
+                    let mut new_env = ctx.env.clone();
+                    new_env.insert(x2, *v);
+                    interp(&ctx.with_env(new_env), e2)
+                },
+                _ =>
+                    Err("tried to case on a non-sum"),
+            },
     }
 }
 
