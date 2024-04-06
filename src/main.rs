@@ -39,7 +39,7 @@ fn main() -> std::io::Result<()> {
         };
         println!("{}", expr.pretty(&interner));
         match typing::synthesize(&ctx, &expr) {
-            Ok(ty) => println!("synthesized type: {:?}", ty),
+            Ok(ty) => println!("synthesized type: {}", ty),
             Err(err) => println!("type error: {}", err.pretty(&interner, &code[..])),
         }
     };

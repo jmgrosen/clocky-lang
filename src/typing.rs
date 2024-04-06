@@ -19,6 +19,12 @@ impl ArraySize {
     }
 }
 
+impl fmt::Display for ArraySize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Type {
     Unit,
@@ -30,6 +36,60 @@ pub enum Type {
     Sum(Box<Type>, Box<Type>),
     Later(Box<Type>),
     Array(Box<Type>, ArraySize),
+}
+
+macro_rules! parenthesize {
+    ($f:expr, $cond:expr, $fmt:literal, $($arg:expr),*) => (
+        if $cond {
+            write!($f, "(").and_then(|_| write!($f, $fmt, $( $arg ),*)).and_then(|_| write!($f, ")"))
+        } else {
+            write!($f, $fmt, $( $arg ),*)
+        }
+    )
+}
+
+fn parenthesize(f: &mut fmt::Formatter<'_>, p: bool, inner: impl FnOnce(&mut fmt::Formatter<'_>) -> fmt::Result) -> fmt::Result {
+    if p {
+        write!(f, "(")?;
+        inner(f)?;
+        write!(f, ")")
+    } else {
+        inner(f)
+    }
+}
+
+impl Type {
+    fn fmt_prec(&self, f: &mut fmt::Formatter<'_>, prec: u8) -> fmt::Result {
+        match *self {
+            Type::Unit =>
+                write!(f, "unit"),
+            Type::Sample =>
+                write!(f, "sample"),
+            Type::Index =>
+                write!(f, "index"),
+            Type::Stream(ref ty) =>
+                parenthesize(f, prec > 3, |f| { write!(f, "~")?; ty.fmt_prec(f, 3) }),
+            Type::Function(ref ty1, ref ty2) =>
+                parenthesize(f, prec > 0, |f| { ty1.fmt_prec(f, 1)?; write!(f, " -> ")?; ty2.fmt_prec(f, 0) }),
+            Type::Product(ref ty1, ref ty2) =>
+                parenthesize(f, prec > 2, |f| { ty1.fmt_prec(f, 3)?; write!(f, " * ")?; ty2.fmt_prec(f, 2) }),
+            Type::Sum(ref ty1, ref ty2) =>
+                parenthesize(f, prec > 1, |f| { ty1.fmt_prec(f, 2)?; write!(f, " * ")?; ty2.fmt_prec(f, 1) }),
+            Type::Later(ref ty) =>
+                parenthesize(f, prec > 3, |f| { write!(f, "|>")?; ty.fmt_prec(f, 3) }),
+            Type::Array(ref ty, ref size) => {
+                write!(f, "[")?;
+                ty.fmt_prec(f, 0)?;
+                write!(f, "; {}]", size)
+            },
+        }
+    }
+}
+
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_prec(f, 0)
+    }
 }
 
 pub type Ctx = HashMap<Symbol, Type>;
@@ -120,32 +180,32 @@ impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self.error {
             TypeError::MismatchingTypes { expr, ref synth, ref expected } =>
-                write!(f, "found {} to have type {:?} but expected {:?}", self.for_expr(expr), synth, expected),
+                write!(f, "found {} to have type {} but expected {}", self.for_expr(expr), synth, expected),
             TypeError::VariableNotFound { var, .. } =>
                 write!(f, "variable \"{}\" not found", self.interner.resolve(var).unwrap()),
             TypeError::BadArgument { ref arg_type, fun, arg, ref arg_err, .. } =>
-                write!(f, "found {} to take argument type {:?}, but argument {} does not have that type: {}",
+                write!(f, "found {} to take argument type {}, but argument {} does not have that type: {}",
                        self.for_expr(fun), arg_type, self.for_expr(arg), self.for_error(arg_err)),
             TypeError::NonFunctionApplication { purported_fun, ref actual_type, .. } =>
-                write!(f, "trying to call {}, but found it to have type {:?}, which is not a function type",
+                write!(f, "trying to call {}, but found it to have type {}, which is not a function type",
                        self.for_expr(purported_fun), actual_type),
             TypeError::Unsupported { expr } =>
                 write!(f, "oops haven't implemented typing rules for {} yet", self.for_expr(expr)),
             TypeError::BadAnnotation { expr, ref purported_type, ref err, .. } =>
-                write!(f, "bad annotation of expression {} as type {:?}: {}", self.for_expr(expr), purported_type, self.for_error(err)),
+                write!(f, "bad annotation of expression {} as type {}: {}", self.for_expr(expr), purported_type, self.for_error(err)),
             TypeError::LetFailure { var, expr, ref err, .. } =>
                 write!(f, "couldn't infer the type of variable {} from definition {}: {}",
                        self.interner.resolve(var).unwrap(), self.for_expr(expr), self.for_error(err)),
             TypeError::ForcingNonThunk { expr, ref actual_type, .. } =>
-                write!(f, "tried to force expression {} of type {:?}, which is not a thunk", self.for_expr(expr), actual_type),
+                write!(f, "tried to force expression {} of type {}, which is not a thunk", self.for_expr(expr), actual_type),
             TypeError::UnPairingNonProduct { expr, ref actual_type, .. } =>
-                write!(f, "tried to unpair expression {} of type {:?}, which is not a product", self.for_expr(expr), actual_type),
+                write!(f, "tried to unpair expression {} of type {}, which is not a product", self.for_expr(expr), actual_type),
             TypeError::CasingNonSum { expr, ref actual_type, .. } =>
-                write!(f, "tried to case on expression {} of type {:?}, which is not a sum", self.for_expr(expr), actual_type),
+                write!(f, "tried to case on expression {} of type {}, which is not a sum", self.for_expr(expr), actual_type),
             TypeError::CouldNotUnify { ref type1, ref type2 } =>
-                write!(f, "could not unify types {:?} and {:?}", type1, type2),
+                write!(f, "could not unify types {} and {}", type1, type2),
             TypeError::MismatchingArraySize { ref expected_size, found_size, .. } =>
-                write!(f, "expected array of size {:?} but found size {}", expected_size, found_size),
+                write!(f, "expected array of size {} but found size {}", expected_size, found_size),
         }
     }
 }
