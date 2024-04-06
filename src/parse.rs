@@ -1,7 +1,7 @@
 use string_interner::DefaultStringInterner;
 use typed_arena::Arena;
 
-use crate::{expr::{Expr, Value, Symbol}, typing::Type};
+use crate::{expr::{Expr, Value, Symbol}, typing::{Type, ArraySize}};
 
 macro_rules! make_node_enum {
     ($enum_name:ident { $($rust_name:ident : $ts_name:ident),* } with matcher $matcher_name:ident) => {
@@ -50,13 +50,16 @@ make_node_enum!(ConcreteNode {
     InLExpression: inl_expression,
     InRExpression: inr_expression,
     CaseExpression: case_expression,
+    ArrayExpression: array_expression,
+    ArrayInner: array_inner,
     Type: type,
     WrapType: wrap_type,
     BaseType: base_type,
     FunctionType: function_type,
     StreamType: stream_type,
     ProductType: product_type,
-    SumType: sum_type
+    SumType: sum_type,
+    ArrayType: array_type
 } with matcher ConcreteNodeMatcher);
 
 pub struct Parser<'a, 'b> {
@@ -136,7 +139,6 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             },
             Some(ConcreteNode::Sample) => {
                 let sample_text = self.node_text(node);
-                println!("{}", sample_text);
                 let sample = sample_text.parse().map_err(|_| ParseError::BadLiteral(node))?;
                 Ok(Expr::Val(node.range(), Value::Sample(sample)))
             },
@@ -203,12 +205,34 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let e2 = self.parse_expr(node.child(11).unwrap())?;
                 Ok(Expr::Case(node.range(), self.alloc(e0), x1, self.alloc(e1), x2, self.alloc(e2)))
             },
+            Some(ConcreteNode::ArrayExpression) => {
+                Ok(Expr::Array(node.range(),
+                    if node.child_count() == 2 {
+                        [].into()
+                    } else {
+                        let array_inner = node.child(1).unwrap();
+                        let mut es = Vec::with_capacity((array_inner.child_count() + 1) / 2);
+                        let mut cur = array_inner.walk();
+                        cur.goto_first_child();
+                        loop {
+                            let e = self.parse_expr(cur.node())?;
+                            es.push(self.alloc(e));
+                            cur.goto_next_sibling();
+                            if !cur.goto_next_sibling() {
+                                break;
+                            }
+                        }
+                        es.into()
+                    }))
+            },
             Some(ConcreteNode::Type) |
             Some(ConcreteNode::BaseType) |
             Some(ConcreteNode::StreamType) |
             Some(ConcreteNode::WrapType) |
             Some(ConcreteNode::ProductType) |
             Some(ConcreteNode::SumType) |
+            Some(ConcreteNode::ArrayType) |
+            Some(ConcreteNode::ArrayInner) |
             Some(ConcreteNode::FunctionType) =>
                 Err(ParseError::ExpectedExpression(node)),
             None => 
@@ -249,10 +273,23 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let ty2 = self.parse_type(node.child(2).unwrap())?;
                 Ok(Type::Sum(Box::new(ty1), Box::new(ty2)))
             },
+            Some(ConcreteNode::ArrayType) => {
+                let ty = self.parse_type(node.child(1).unwrap())?;
+                let size = self.parse_size(node.child(3).unwrap())?;
+                Ok(Type::Array(Box::new(ty), size))
+            },
             Some(_) =>
                 Err(ParseError::ExpectedType(node)),
             None =>
                 Err(ParseError::UnknownNodeType(node)),
+        }
+    }
+
+    fn parse_size<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<ArraySize, ParseError<'d>> {
+        let text = self.node_text(node);
+        match text.parse() {
+            Ok(n) => Ok(ArraySize::from_const(n)),
+            Err(_) => Err(ParseError::BadLiteral(node)),
         }
     }
 }

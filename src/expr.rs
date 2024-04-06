@@ -21,6 +21,7 @@ pub enum Value<'a> {
     Closure(Env<'a>, Symbol, &'a Expr<'a, ()>),
     Suspend(Env<'a>, &'a Expr<'a, ()>),
     BuiltinPartial(Builtin, Box<[Value<'a>]>),
+    Array(Box<[Value<'a>]>),
 }
 
 // TODO: use a better type here... eventually we should resolve symbols and just use de bruijn offsets or similar...
@@ -43,6 +44,7 @@ pub enum Expr<'a, R> {
     InL(R, &'a Expr<'a, R>),
     InR(R, &'a Expr<'a, R>),
     Case(R, &'a Expr<'a, R>, Symbol, &'a Expr<'a, R>, Symbol, &'a Expr<'a, R>),
+    Array(R, Box<[&'a Expr<'a, R>]>),
 }
 
 impl<'a, R> Expr<'a, R> {
@@ -62,6 +64,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::InL(ref r, e) => Expr::InL(f(r), arena.alloc(e.map_ext(arena, f))),
             Expr::InR(ref r, e) => Expr::InR(f(r), arena.alloc(e.map_ext(arena, f))),
             Expr::Case(ref r, e0, s1, e1, s2, e2) => Expr::Case(f(r), arena.alloc(e0.map_ext(arena, f)), s1, arena.alloc(e1.map_ext(arena, f)), s2, arena.alloc(e2.map_ext(arena, f))),
+            Expr::Array(ref r, ref es) => Expr::Array(f(r), es.iter().map(|e| &*arena.alloc(e.map_ext(arena, f))).collect::<Vec<_>>().into()),
         }
     }
 
@@ -118,6 +121,16 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
                 write!(f, "InR({})", self.for_expr(e)),
             Expr::Case(_, e0, x1, e1, x2, e2) =>
                 write!(f, "Case({}, {}, {}, {}, {})", self.for_expr(e0), self.name(x1), self.for_expr(e1), self.name(x2), self.for_expr(e2)),
+            Expr::Array(_, ref es) => {
+                write!(f, "Array(")?;
+                for (i, e) in es.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", self.for_expr(e))?;
+                }
+                write!(f, ")")
+            },
         }
     }
 }

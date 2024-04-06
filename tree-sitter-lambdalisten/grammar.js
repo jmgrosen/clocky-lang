@@ -20,7 +20,8 @@ module.exports = grammar({
             $.unpair_expression,
             $.inl_expression,
             $.inr_expression,
-            $.case_expression
+            $.case_expression,
+            $.array_expression
         ),
 
         wrap_expression: $ => seq('(', $.expression, ')'),    
@@ -55,13 +56,18 @@ module.exports = grammar({
 
         case_expression: $ => seq('case', $.expression, '{', 'inl', $.identifier, '=>', $.expression, '|', 'inr', $.identifier, '=>', $.expression, '}'),
 
+        array_expression: $ => choice(seq('[', ']'), seq('[', $.array_inner, ']')),
+
+        array_inner: $ => seq(repeat(seq($.expression, ',')), $.expression),
+
         type: $ => choice(
             $.wrap_type,
             $.base_type,
             $.function_type,
             $.stream_type,
             $.product_type,
-            $.sum_type
+            $.sum_type,
+            $.array_type
         ),
 
         wrap_type: $ => seq('(', $.type, ')'),
@@ -78,6 +84,10 @@ module.exports = grammar({
 
         product_type: $ => prec.right(2, seq($.type, '*', $.type)),
 
-        sum_type: $ => prec.right(1, seq($.type, '+', $.type))
+        sum_type: $ => prec.right(1, seq($.type, '+', $.type)),
+
+        array_type: $ => seq('[', $.type, ';', $.size, ']'),
+
+        size: $ => /[\d]+/
     }
 });

@@ -1,9 +1,23 @@
 use core::fmt;
 use std::collections::HashMap;
 
-use string_interner::{StringInterner, DefaultStringInterner};
+use string_interner::DefaultStringInterner;
 
 use crate::expr::{Symbol, Expr, Value, PrettyExpr};
+
+// eventually this will get more complicated...
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ArraySize(usize);
+
+impl ArraySize {
+    pub fn from_const(n: usize) -> ArraySize {
+        ArraySize(n)
+    }
+
+    pub fn as_const(&self) -> Option<usize> {
+        Some(self.0)
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Type {
@@ -15,6 +29,7 @@ pub enum Type {
     Product(Box<Type>, Box<Type>),
     Sum(Box<Type>, Box<Type>),
     Later(Box<Type>),
+    Array(Box<Type>, ArraySize),
 }
 
 pub type Ctx = HashMap<Symbol, Type>;
@@ -32,6 +47,7 @@ pub enum TypeError<'a, R> {
     UnPairingNonProduct { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
     CasingNonSum { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
     CouldNotUnify { type1: Type, type2: Type },
+    MismatchingArraySize { range: R, expected_size: ArraySize, found_size: usize },
 }
 
 impl<'a, R> TypeError<'a, R> {
@@ -128,6 +144,8 @@ impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
                 write!(f, "tried to case on expression {} of type {:?}, which is not a sum", self.for_expr(expr), actual_type),
             TypeError::CouldNotUnify { ref type1, ref type2 } =>
                 write!(f, "could not unify types {:?} and {:?}", type1, type2),
+            TypeError::MismatchingArraySize { ref expected_size, found_size, .. } =>
+                write!(f, "expected array of size {:?} but found size {}", expected_size, found_size),
         }
     }
 }
@@ -194,6 +212,15 @@ pub fn check<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Resul
                 ty =>
                     Err(TypeError::casing_non_sum(r.clone(), e0, ty)),
             },
+        (&Type::Array(ref ty, ref size), &Expr::Array(ref r, ref es)) =>
+            if size.as_const() != Some(es.len()) {
+                Err(TypeError::MismatchingArraySize { range: r.clone(), expected_size: size.clone(), found_size: es.len() })
+            } else {
+                for e in es.iter() {
+                    check(ctx, e, ty)?;
+                }
+                Ok(())
+            },
         (_, _) => {
             let synthesized = synthesize(ctx, expr)?;
             if synthesized == *ty {
@@ -218,6 +245,7 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
                 Value::Pair(_, _) |
                 Value::InL(_) |
                 Value::InR(_) |
+                Value::Array(_) |
                 Value::BuiltinPartial(_, _) =>
                     panic!("trying to type {v:?} but that kind of value shouldn't be created yet?"),
             }
@@ -295,6 +323,7 @@ fn meet<'a, R>(ty1: Type, ty2: Type) -> Result<Type, TypeError<'a, R>> {
     }
 }
 
+#[cfg(test)]
 mod test {
     use crate::expr::Value;
     use super::*;

@@ -114,6 +114,13 @@ fn interp<'a>(ctx: &InterpretationContext<'a>, expr: &'a Expr<'a, ()>) -> Result
                 _ =>
                     Err("tried to case on a non-sum"),
             },
+        Expr::Array(_, ref es) => {
+            let mut vs = Vec::with_capacity(es.len());
+            for e in es.iter() {
+                vs.push(interp(ctx, e)?);
+            }
+            Ok(Value::Array(vs.into()))
+        },
     }
 }
 
