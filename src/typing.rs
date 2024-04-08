@@ -38,16 +38,6 @@ pub enum Type {
     Array(Box<Type>, ArraySize),
 }
 
-macro_rules! parenthesize {
-    ($f:expr, $cond:expr, $fmt:literal, $($arg:expr),*) => (
-        if $cond {
-            write!($f, "(").and_then(|_| write!($f, $fmt, $( $arg ),*)).and_then(|_| write!($f, ")"))
-        } else {
-            write!($f, $fmt, $( $arg ),*)
-        }
-    )
-}
-
 fn parenthesize(f: &mut fmt::Formatter<'_>, p: bool, inner: impl FnOnce(&mut fmt::Formatter<'_>) -> fmt::Result) -> fmt::Result {
     if p {
         write!(f, "(")?;

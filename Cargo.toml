@@ -9,6 +9,8 @@ edition = "2021"
 cc="*"
 
 [dependencies]
+clap = { version = "4.5.4", features = ["derive"] }
+hound = "3.5.1"
 string-interner = "0.15"
 tree-sitter = "0.20"
 tree-sitter-lambdalisten = { path = "tree-sitter-lambdalisten" }

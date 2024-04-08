@@ -65,8 +65,8 @@ make_node_enum!(ConcreteNode {
 pub struct Parser<'a, 'b> {
     parser: tree_sitter::Parser,
     node_matcher: ConcreteNodeMatcher,
-    interner: &'a mut DefaultStringInterner,
-    arena: &'b Arena<Expr<'b, tree_sitter::Range>>,
+    pub interner: &'a mut DefaultStringInterner,
+    pub arena: &'b Arena<Expr<'b, tree_sitter::Range>>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
@@ -84,20 +84,20 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
     }
 
-    pub fn parse(&mut self, text: &str) -> Result<Expr<'b, tree_sitter::Range>, String> {
+    pub fn parse(&mut self, text: &str) -> Result<Expr<'b, tree_sitter::Range>, ParseError> {
         // this unwrap should be safe because we make sure to set the language and don't set a timeout or cancellation flag
         let tree = self.parser.parse(text, None).unwrap();
         let root_node = tree.root_node();
-        AbstractionContext { parser: self, original_text: text }.parse_expr(root_node).map_err(|e| format!("{:?}", e))
+        AbstractionContext { parser: self, original_text: text }.parse_expr(root_node)
     }
 }
 
 #[derive(Debug)]
-pub enum ParseError<'a> {
-    BadLiteral(tree_sitter::Node<'a>),
-    ExpectedExpression(tree_sitter::Node<'a>),
-    ExpectedType(tree_sitter::Node<'a>),
-    UnknownNodeType(tree_sitter::Node<'a>),
+pub enum ParseError {
+    BadLiteral(tree_sitter::Range),
+    ExpectedExpression(tree_sitter::Range),
+    ExpectedType(tree_sitter::Range),
+    UnknownNodeType(tree_sitter::Range, String),
 }
 
 struct AbstractionContext<'a, 'b, 'c> {
@@ -119,7 +119,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
         self.parser.interner.get_or_intern(self.node_text(node))
     }
 
-    fn parse_expr<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<Expr<'b, tree_sitter::Range>, ParseError<'d>> {
+    fn parse_expr<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<Expr<'b, tree_sitter::Range>, ParseError> {
         // TODO: use a TreeCursor instead
         match self.parser.node_matcher.lookup(node.kind_id()) {
             Some(ConcreteNode::SourceFile) =>
@@ -134,12 +134,12 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 Ok(Expr::Var(node.range(), interned_ident))
             },
             Some(ConcreteNode::Literal) => {
-                let int_lit = self.node_text(node).parse().map_err(|_| ParseError::BadLiteral(node))?;
+                let int_lit = self.node_text(node).parse().map_err(|_| ParseError::BadLiteral(node.range()))?;
                 Ok(Expr::Val(node.range(), Value::Index(int_lit)))
             },
             Some(ConcreteNode::Sample) => {
                 let sample_text = self.node_text(node);
-                let sample = sample_text.parse().map_err(|_| ParseError::BadLiteral(node))?;
+                let sample = sample_text.parse().map_err(|_| ParseError::BadLiteral(node.range()))?;
                 Ok(Expr::Val(node.range(), Value::Sample(sample)))
             },
             Some(ConcreteNode::ApplicationExpression) => {
@@ -234,14 +234,14 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             Some(ConcreteNode::ArrayType) |
             Some(ConcreteNode::ArrayInner) |
             Some(ConcreteNode::FunctionType) =>
-                Err(ParseError::ExpectedExpression(node)),
+                Err(ParseError::ExpectedExpression(node.range())),
             None => 
-                Err(ParseError::UnknownNodeType(node)),
+                Err(ParseError::UnknownNodeType(node.range(), node.kind().into())),
         }
     }
 
     // TODO: add range information to Type?
-    fn parse_type<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<Type, ParseError<'d>> {
+    fn parse_type<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<Type, ParseError> {
         match self.parser.node_matcher.lookup(node.kind_id()) {
             Some(ConcreteNode::Type) =>
                 self.parse_type(node.child(0).unwrap()),
@@ -279,17 +279,17 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 Ok(Type::Array(Box::new(ty), size))
             },
             Some(_) =>
-                Err(ParseError::ExpectedType(node)),
+                Err(ParseError::ExpectedType(node.range())),
             None =>
-                Err(ParseError::UnknownNodeType(node)),
+                Err(ParseError::UnknownNodeType(node.range(), node.kind().into())),
         }
     }
 
-    fn parse_size<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<ArraySize, ParseError<'d>> {
+    fn parse_size<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<ArraySize, ParseError> {
         let text = self.node_text(node);
         match text.parse() {
             Ok(n) => Ok(ArraySize::from_const(n)),
-            Err(_) => Err(ParseError::BadLiteral(node)),
+            Err(_) => Err(ParseError::BadLiteral(node.range())),
         }
     }
 }

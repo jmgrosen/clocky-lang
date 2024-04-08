@@ -1,18 +1,18 @@
 use crate::expr::{Expr, Value, Env};
 use crate::builtin::BuiltinsMap;
 
-struct InterpretationContext<'a> {
-    builtins: &'a BuiltinsMap,
-    env: Env<'a>,
+pub struct InterpretationContext<'a, 'b> {
+    pub builtins: &'b BuiltinsMap,
+    pub env: Env<'a>,
 }
 
-impl<'a> InterpretationContext<'a> {
-    fn with_env(&self, new_env: Env<'a>) -> InterpretationContext<'a> {
+impl<'a, 'b> InterpretationContext<'a, 'b> {
+    fn with_env(&self, new_env: Env<'a>) -> InterpretationContext<'a, 'b> {
         InterpretationContext { builtins: self.builtins, env: new_env }
     }
 }
 
-fn interp<'a>(ctx: &InterpretationContext<'a>, expr: &'a Expr<'a, ()>) -> Result<Value<'a>, &'static str> {
+pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()>) -> Result<Value<'a>, &'static str> {
     match *expr {
         Expr::Var(_, ref x) => {
             if let Some(v) = ctx.env.get(x) {
