@@ -121,6 +121,13 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
             }
             Ok(Value::Array(vs.into()))
         },
+        Expr::UnGen(_, e) =>
+            match interp(ctx, e)? {
+                Value::Gen(new_env, v_hd, e_tl) =>
+                    Ok(Value::Pair(v_hd, Box::new(Value::Suspend(new_env, e_tl)))),
+                _ =>
+                    Err("tried to ungen a non-gen"),
+            },
     }
 }
 

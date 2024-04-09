@@ -45,6 +45,7 @@ pub enum Expr<'a, R> {
     InR(R, &'a Expr<'a, R>),
     Case(R, &'a Expr<'a, R>, Symbol, &'a Expr<'a, R>, Symbol, &'a Expr<'a, R>),
     Array(R, Box<[&'a Expr<'a, R>]>),
+    UnGen(R, &'a Expr<'a, R>),
 }
 
 impl<'a, R> Expr<'a, R> {
@@ -65,6 +66,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::InR(ref r, e) => Expr::InR(f(r), arena.alloc(e.map_ext(arena, f))),
             Expr::Case(ref r, e0, s1, e1, s2, e2) => Expr::Case(f(r), arena.alloc(e0.map_ext(arena, f)), s1, arena.alloc(e1.map_ext(arena, f)), s2, arena.alloc(e2.map_ext(arena, f))),
             Expr::Array(ref r, ref es) => Expr::Array(f(r), es.iter().map(|e| &*arena.alloc(e.map_ext(arena, f))).collect::<Vec<_>>().into()),
+            Expr::UnGen(ref r, ref e) => Expr::UnGen(f(r), arena.alloc(e.map_ext(arena, f))),
         }
     }
 
@@ -131,6 +133,8 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
                 }
                 write!(f, ")")
             },
+            Expr::UnGen(_, ref e) =>
+                write!(f, "UnGen({})", self.for_expr(e)),
         }
     }
 }

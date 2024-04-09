@@ -98,6 +98,7 @@ pub enum TypeError<'a, R> {
     CasingNonSum { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
     CouldNotUnify { type1: Type, type2: Type },
     MismatchingArraySize { range: R, expected_size: ArraySize, found_size: usize },
+    UnGenningNonStream { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
 }
 
 impl<'a, R> TypeError<'a, R> {
@@ -196,6 +197,8 @@ impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
                 write!(f, "could not unify types {} and {}", type1, type2),
             TypeError::MismatchingArraySize { ref expected_size, found_size, .. } =>
                 write!(f, "expected array of size {} but found size {}", expected_size, found_size),
+            TypeError::UnGenningNonStream { expr, ref actual_type, .. } =>
+                write!(f, "expected stream to ungen, but found {} of type {}", self.for_expr(expr), actual_type),
         }
     }
 }
@@ -360,6 +363,13 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
                 ty =>
                     Err(TypeError::casing_non_sum(r.clone(), e0, ty)),
             },
+        &Expr::UnGen(ref r, e) =>
+            match synthesize(ctx, e)? {
+                Type::Stream(ty) =>
+                    Ok(Type::Product(ty.clone(), Box::new(Type::Later(Box::new(Type::Stream(ty)))))),
+                ty =>
+                    Err(TypeError::UnGenningNonStream { range: r.clone(), expr: e, actual_type: ty }),
+            }
         _ =>
             Err(TypeError::unsupported(expr)),
     }

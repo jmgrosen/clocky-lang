@@ -52,6 +52,7 @@ make_node_enum!(ConcreteNode {
     CaseExpression: case_expression,
     ArrayExpression: array_expression,
     ArrayInner: array_inner,
+    UnGenExpression: ungen_expression,
     Type: type,
     WrapType: wrap_type,
     BaseType: base_type,
@@ -84,12 +85,20 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
     }
 
-    pub fn parse(&mut self, text: &str) -> Result<Expr<'b, tree_sitter::Range>, ParseError> {
+    pub fn parse(&mut self, text: &str) -> Result<Expr<'b, tree_sitter::Range>, FullParseError> {
         // this unwrap should be safe because we make sure to set the language and don't set a timeout or cancellation flag
         let tree = self.parser.parse(text, None).unwrap();
         let root_node = tree.root_node();
-        AbstractionContext { parser: self, original_text: text }.parse_expr(root_node)
+        AbstractionContext { parser: self, original_text: text }
+            .parse_expr(root_node)
+            .map_err(|error| FullParseError { tree, error })
     }
+}
+
+#[derive(Debug)]
+pub struct FullParseError {
+    pub tree: tree_sitter::Tree,
+    pub error: ParseError,
 }
 
 #[derive(Debug)]
@@ -224,6 +233,10 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                         }
                         es.into()
                     }))
+            },
+            Some(ConcreteNode::UnGenExpression) => {
+                let e = self.parse_expr(node.child(1).unwrap())?;
+                Ok(Expr::UnGen(node.range(), self.parser.arena.alloc(e)))
             },
             Some(ConcreteNode::Type) |
             Some(ConcreteNode::BaseType) |
