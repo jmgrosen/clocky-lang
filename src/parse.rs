@@ -54,6 +54,7 @@ make_node_enum!(ConcreteNode {
     ArrayExpression: array_expression,
     ArrayInner: array_inner,
     UnGenExpression: ungen_expression,
+    UnitExpression: unit_expression,
     Type: type,
     WrapType: wrap_type,
     BaseType: base_type,
@@ -250,6 +251,8 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let e = self.parse_expr(node.child(1).unwrap())?;
                 Ok(Expr::UnGen(node.range(), self.parser.arena.alloc(e)))
             },
+            Some(ConcreteNode::UnitExpression) =>
+                Ok(Expr::Val(node.range(), Value::Unit)),
             Some(ConcreteNode::Type) |
             Some(ConcreteNode::BaseType) |
             Some(ConcreteNode::StreamType) |

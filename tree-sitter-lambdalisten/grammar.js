@@ -22,7 +22,8 @@ module.exports = grammar({
             $.inr_expression,
             $.case_expression,
             $.array_expression,
-            $.ungen_expression
+            $.ungen_expression,
+            $.unit_expression
         ),
 
         wrap_expression: $ => seq('(', $.expression, ')'),    
@@ -62,6 +63,8 @@ module.exports = grammar({
         array_inner: $ => seq(repeat(seq($.expression, ',')), $.expression),
 
         ungen_expression: $ => prec(2, seq('*', $.expression)),
+
+        unit_expression: $ => '()',
 
         type: $ => choice(
             $.wrap_type,
