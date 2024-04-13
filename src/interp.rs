@@ -75,7 +75,7 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
             let vh = interp(ctx, eh)?;
             Ok(Value::Gen(ctx.env.clone(), Box::new(vh), et))
         },
-        Expr::LetIn(_, x, e1, e2) => {
+        Expr::LetIn(_, x, _, e1, e2) => {
             let v = interp(ctx, e1)?;
             let mut new_env = ctx.env.clone();
             new_env.insert(x, v);

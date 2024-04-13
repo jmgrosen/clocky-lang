@@ -43,7 +43,7 @@ module.exports = grammar({
 
         gen_expression: $ => prec.right(seq($.expression, '::', $.expression)),
 
-        let_expression: $ => prec.left(-1, seq('let', $.identifier, '=', $.expression, 'in', $.expression)),
+        let_expression: $ => prec.left(-1, seq('let', $.identifier, optional(seq(':', $.type)), '=', $.expression, 'in', $.expression)),
 
         annotate_expression: $ => seq($.expression, ':', $.type),
 

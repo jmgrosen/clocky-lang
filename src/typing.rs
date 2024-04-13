@@ -159,7 +159,8 @@ pub enum TypeError<'a, R> {
     NonFunctionApplication { range: R, purported_fun: &'a Expr<'a, R>, actual_type: Type },
     Unsupported { expr: &'a Expr<'a, R> },
     BadAnnotation { range: R, expr: &'a Expr<'a, R>, purported_type: Type, err: Box<TypeError<'a, R>> },
-    LetFailure { range: R, var: Symbol, expr: &'a Expr<'a, R>, err: Box<TypeError<'a, R>> },
+    LetSynthFailure { range: R, var: Symbol, expr: &'a Expr<'a, R>, err: Box<TypeError<'a, R>> },
+    LetCheckFailure { range: R, var: Symbol, expected_type: Type, expr: &'a Expr<'a, R>, err: Box<TypeError<'a, R>> },
     ForcingNonThunk { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
     UnPairingNonProduct { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
     CasingNonSum { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
@@ -194,7 +195,7 @@ impl<'a, R> TypeError<'a, R> {
     }
 
     fn let_failure(range: R, var: Symbol, expr: &'a Expr<'a, R>, err: TypeError<'a, R>) -> TypeError<'a, R> {
-        TypeError::LetFailure { range, var, expr, err: Box::new(err) }
+        TypeError::LetSynthFailure { range, var, expr, err: Box::new(err) }
     }
 
     fn forcing_non_thunk(range: R, expr: &'a Expr<'a, R>, actual_type: Type) -> TypeError<'a, R> {
@@ -255,7 +256,10 @@ impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
                 write!(f, "oops haven't implemented typing rules for {} yet", self.for_expr(expr)),
             TypeError::BadAnnotation { expr, ref purported_type, ref err, .. } =>
                 write!(f, "bad annotation of expression {} as type {}: {}", self.for_expr(expr), self.for_type(purported_type), self.for_error(err)),
-            TypeError::LetFailure { var, expr, ref err, .. } =>
+            TypeError::LetCheckFailure { var, expr, ref expected_type, ref err, .. } =>
+                write!(f, "couldn't check variable {} to have type {} from definition {}: {}",
+                       self.interner.resolve(var).unwrap(), self.for_type(expected_type), self.for_expr(expr), self.for_error(err)),
+            TypeError::LetSynthFailure { var, expr, ref err, .. } =>
                 write!(f, "couldn't infer the type of variable {} from definition {}: {}",
                        self.interner.resolve(var).unwrap(), self.for_expr(expr), self.for_error(err)),
             TypeError::ForcingNonThunk { expr, ref actual_type, .. } =>
@@ -289,12 +293,12 @@ pub fn check<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Resul
             check(&new_ctx, e, ty)
         },
         // if we think of streams as infinitary products, it makes sense to *check* their introduction, right?
-        (&Type::Stream(clock, ref ty1), &Expr::Gen(_, eh, et)) => {
+        (&Type::Stream(_clock, ref ty1), &Expr::Gen(_, eh, et)) => {
             // TODO: probably change once we figure out the stream semantics we actually want
             check(&ctx, eh, ty1)?;
             check(&ctx, et, ty)
         },
-        (_, &Expr::LetIn(ref r, x, e1, e2)) =>
+        (_, &Expr::LetIn(ref r, x, None, e1, e2)) =>
             match synthesize(ctx, e1) {
                 Ok(ty_x) => {
                     let mut new_ctx = ctx.clone();
@@ -304,6 +308,20 @@ pub fn check<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Resul
                 Err(err) =>
                     Err(TypeError::let_failure(r.clone(), x, e1, err)),
             },
+        (_, &Expr::LetIn(ref r, x, Some(ref ty), e1, e2)) => {
+            if let Err(err) = check(ctx, e1, ty) {
+                return Err(TypeError::LetCheckFailure {
+                    range: r.clone(),
+                    var: x,
+                    expected_type: ty.clone(),
+                    expr: e1,
+                    err: Box::new(err)
+                });
+            }
+            let mut new_ctx = ctx.clone();
+            new_ctx.insert(x, ty.clone());
+            check(&new_ctx, e2, ty)
+        },
         (&Type::Product(ref ty1, ref ty2), &Expr::Pair(_, e1, e2)) => {
             check(ctx, e1, ty1)?;
             check(ctx, e2, ty2)
@@ -398,7 +416,7 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
                 // TODO: add error here
                 ty => Err(TypeError::forcing_non_thunk(r.clone(), e1, ty)),
             },
-        &Expr::LetIn(ref r, x, e1, e2) =>
+        &Expr::LetIn(ref r, x, None, e1, e2) =>
             match synthesize(ctx, e1) {
                 Ok(ty_x) => {
                     let mut new_ctx = ctx.clone();
@@ -408,6 +426,20 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
                 Err(err) =>
                     Err(TypeError::let_failure(r.clone(), x, e1, err)),
             },
+        &Expr::LetIn(ref r, x, Some(ref ty), e1, e2) => {
+            if let Err(err) = check(ctx, e1, ty) {
+                return Err(TypeError::LetCheckFailure {
+                    range: r.clone(),
+                    var: x,
+                    expected_type: ty.clone(),
+                    expr: e1,
+                    err: Box::new(err)
+                });
+            }
+            let mut new_ctx = ctx.clone();
+            new_ctx.insert(x, ty.clone());
+            synthesize(&new_ctx, e2)
+        },
         &Expr::UnPair(ref r, x1, x2, e0, e) =>
             match synthesize(ctx, e0)? {
                 Type::Product(ty1, ty2) => {

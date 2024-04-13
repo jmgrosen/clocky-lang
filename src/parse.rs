@@ -181,9 +181,17 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             },
             Some(ConcreteNode::LetExpression) => {
                 let x = self.parser.interner.get_or_intern(self.node_text(node.child(1).unwrap()));
-                let e1 = self.parse_expr(node.child(3).unwrap())?;
-                let e2 = self.parse_expr(node.child(5).unwrap())?;
-                Ok(Expr::LetIn(node.range(), x, self.parser.arena.alloc(e1), self.parser.arena.alloc(e2)))
+                let (ty, e1_idx, e2_idx) = match node.child_count() {
+                    6 => (None, 3, 5),
+                    8 => {
+                        let ty = self.parse_type(node.child(3).unwrap())?;
+                        (Some(ty), 5, 7)
+                    },
+                    n => panic!("how does a let expression have {} children??", n),
+                };
+                let e1 = self.parse_expr(node.child(e1_idx).unwrap())?;
+                let e2 = self.parse_expr(node.child(e2_idx).unwrap())?;
+                Ok(Expr::LetIn(node.range(), x, ty, self.parser.arena.alloc(e1), self.parser.arena.alloc(e2)))
             },
             Some(ConcreteNode::AnnotateExpression) => {
                 let e = self.parse_expr(node.child(0).unwrap())?;
