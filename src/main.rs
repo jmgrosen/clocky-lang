@@ -210,6 +210,9 @@ fn cmd_repl<'a>(toplevel: &mut TopLevel<'_, 'a>) -> TopLevelResult<'a, ()> {
         match repl_one(toplevel, &interp_ctx, line?) {
             Ok(()) => { },
             Err(err @ TopLevelError::IoError(_)) => { return Err(err); },
+            Err(TopLevelError::TypeError(code, e)) => {
+                println!("{}", e.pretty(toplevel.parser.interner, &code));
+            },
             Err(err) => { println!("{:?}", err); },
         }
     }
