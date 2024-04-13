@@ -65,7 +65,7 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
             };
             interp(&ctx.with_env(env1), &*ebody)
         },
-        Expr::Lob(_, s, ref e) => {
+        Expr::Lob(_, _, s, ref e) => {
             let susp = Value::Suspend(ctx.env.clone(), expr);
             let mut new_env = ctx.env.clone();
             new_env.insert(s, susp);

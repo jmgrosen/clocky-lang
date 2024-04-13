@@ -155,7 +155,7 @@ fn cmd_typecheck<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>) -> 
     };
     let expr = toplevel.parser.arena.alloc(expr);
     let ty = typing::synthesize(&toplevel.ctx, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
-    println!("synthesized type: {}", ty);
+    println!("synthesized type: {}", ty.pretty(&toplevel.parser.interner));
     Ok(())
 }
 
@@ -167,7 +167,7 @@ fn cmd_interpret<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>) -> 
     };
     let expr = toplevel.parser.arena.alloc(expr);
     let ty = typing::synthesize(&toplevel.ctx, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
-    println!("synthesized type: {}", ty);
+    println!("synthesized type: {}", ty.pretty(&toplevel.parser.interner));
 
     let arena = Arena::new();
     let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
@@ -189,7 +189,7 @@ fn repl_one<'a>(toplevel: &mut TopLevel<'_, 'a>, interp_ctx: &interp::Interpreta
     };
     let expr = toplevel.parser.arena.alloc(expr);
     let ty = typing::synthesize(&toplevel.ctx, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
-    println!("synthesized type: {}", ty);
+    println!("synthesized type: {}", ty.pretty(&toplevel.parser.interner));
 
     let arena = Arena::new();
     let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
@@ -226,7 +226,7 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>, length
     let expr = toplevel.parser.arena.alloc(expr);
 
     match typing::synthesize(&toplevel.ctx, expr).map_err(|e| TopLevelError::TypeError(code, e))? {
-        Type::Stream(ty) if *ty == Type::Sample => { },
+        Type::Stream(_, ty) if *ty == Type::Sample => { },
         ty => { return Err(TopLevelError::CannotSample(ty)); },
     }
 

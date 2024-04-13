@@ -1,7 +1,8 @@
 use string_interner::DefaultStringInterner;
 use typed_arena::Arena;
+use num::rational::Ratio;
 
-use crate::{expr::{Expr, Value, Symbol}, typing::{Type, ArraySize}};
+use crate::{expr::{Expr, Value, Symbol}, typing::{Type, ArraySize, Clock}};
 
 macro_rules! make_node_enum {
     ($enum_name:ident { $($rust_name:ident : $ts_name:ident),* } with matcher $matcher_name:ident) => {
@@ -60,7 +61,8 @@ make_node_enum!(ConcreteNode {
     StreamType: stream_type,
     ProductType: product_type,
     SumType: sum_type,
-    ArrayType: array_type
+    ArrayType: array_type,
+    LaterType: later_type
 } with matcher ConcreteNodeMatcher);
 
 pub struct Parser<'a, 'b> {
@@ -107,6 +109,7 @@ pub enum ParseError {
     ExpectedExpression(tree_sitter::Range),
     ExpectedType(tree_sitter::Range),
     UnknownNodeType(tree_sitter::Range, String),
+    BadCoefficient(tree_sitter::Range),
 }
 
 struct AbstractionContext<'a, 'b, 'c> {
@@ -162,9 +165,10 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 Ok(Expr::Lam(node.range(), x, self.parser.arena.alloc(e)))
             },
             Some(ConcreteNode::LobExpression) => {
-                let x = self.parser.interner.get_or_intern(self.node_text(node.child(1).unwrap()));
-                let e = self.parse_expr(node.child(3).unwrap())?;
-                Ok(Expr::Lob(node.range(), x, self.parser.arena.alloc(e)))
+                let clock = self.parse_clock(node.child(3).unwrap())?;
+                let x = self.parser.interner.get_or_intern(self.node_text(node.child(5).unwrap()));
+                let e = self.parse_expr(node.child(7).unwrap())?;
+                Ok(Expr::Lob(node.range(), clock, x, self.parser.arena.alloc(e)))
             },
             Some(ConcreteNode::ForceExpression) => {
                 let e = self.parse_expr(node.child(1).unwrap())?;
@@ -246,6 +250,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             Some(ConcreteNode::SumType) |
             Some(ConcreteNode::ArrayType) |
             Some(ConcreteNode::ArrayInner) |
+            Some(ConcreteNode::LaterType) |
             Some(ConcreteNode::FunctionType) =>
                 Err(ParseError::ExpectedExpression(node.range())),
             None => 
@@ -273,8 +278,9 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 Ok(Type::Function(Box::new(ty1), Box::new(ty2)))
             },
             Some(ConcreteNode::StreamType) => {
-                let ty = self.parse_type(node.child(1).unwrap())?;
-                Ok(Type::Stream(Box::new(ty)))
+                let clock = self.parse_clock(node.child(3).unwrap())?;
+                let ty = self.parse_type(node.child(5).unwrap())?;
+                Ok(Type::Stream(clock, Box::new(ty)))
             },
             Some(ConcreteNode::ProductType) => {
                 let ty1 = self.parse_type(node.child(0).unwrap())?;
@@ -291,6 +297,11 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let size = self.parse_size(node.child(3).unwrap())?;
                 Ok(Type::Array(Box::new(ty), size))
             },
+            Some(ConcreteNode::LaterType) => {
+                let clock = self.parse_clock(node.child(3).unwrap())?;
+                let ty = self.parse_type(node.child(5).unwrap())?;
+                Ok(Type::Later(clock, Box::new(ty)))
+            },
             Some(_) =>
                 Err(ParseError::ExpectedType(node.range())),
             None =>
@@ -298,11 +309,35 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
         }
     }
 
-    fn parse_size<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<ArraySize, ParseError> {
+    fn parse_size<'d>(&self, node: tree_sitter::Node<'d>) -> Result<ArraySize, ParseError> {
         let text = self.node_text(node);
         match text.parse() {
             Ok(n) => Ok(ArraySize::from_const(n)),
             Err(_) => Err(ParseError::BadLiteral(node.range())),
+        }
+    }
+
+    fn parse_clock<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<Clock, ParseError> {
+        if node.child_count() == 1 {
+            Ok(Clock { coeff: Ratio::from_integer(1), var: self.identifier(node.child(0).unwrap()) })
+        } else {
+            let coeff = self.parse_clock_coeff(node.child(0).unwrap())?;
+            Ok(Clock { coeff, var: self.identifier(node.child(1).unwrap()) })
+        }
+    }
+
+    fn parse_clock_coeff(&mut self, node: tree_sitter::Node<'_>) -> Result<Ratio<u32>, ParseError> {
+        if node.child_count() == 1 {
+            let n = self.node_text(node).parse().map_err(|_| ParseError::BadCoefficient(node.range()))?;
+            Ok(Ratio::from_integer(n))
+        } else {
+            let n = self.node_text(node.child(0).unwrap()).parse().map_err(|_| ParseError::BadCoefficient(node.range()))?;
+            let d = self.node_text(node.child(2).unwrap()).parse().map_err(|_| ParseError::BadCoefficient(node.range()))?;
+            if d > 0 {
+                Ok(Ratio::new(n, d))
+            } else {
+                Err(ParseError::BadCoefficient(node.range()))
+            }
         }
     }
 }

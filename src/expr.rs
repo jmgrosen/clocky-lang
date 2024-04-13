@@ -5,7 +5,7 @@ use string_interner::{DefaultStringInterner, DefaultSymbol};
 use typed_arena::Arena;
 
 use crate::builtin::Builtin;
-use crate::typing::Type;
+use crate::typing::{Clock, Type, PrettyClock};
 
 pub type Symbol = DefaultSymbol;
 
@@ -36,7 +36,7 @@ pub enum Expr<'a, R> {
     Lam(R, Symbol, &'a Expr<'a, R>),
     App(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
     Force(R, &'a Expr<'a, R>),
-    Lob(R, Symbol, &'a Expr<'a, R>),
+    Lob(R, Clock, Symbol, &'a Expr<'a, R>),
     Gen(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
     LetIn(R, Symbol, &'a Expr<'a, R>, &'a Expr<'a, R>),
     Pair(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
@@ -57,7 +57,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::Lam(ref r, s, ref e) => Expr::Lam(f(r), s, arena.alloc(e.map_ext(arena, f))),
             Expr::App(ref r, ref e1, ref e2) => Expr::App(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
             Expr::Force(ref r, ref e) => Expr::Force(f(r), arena.alloc(e.map_ext(arena, f))),
-            Expr::Lob(ref r, s, ref e) => Expr::Lob(f(r), s, arena.alloc(e.map_ext(arena, f))),
+            Expr::Lob(ref r, clock, s, ref e) => Expr::Lob(f(r), clock, s, arena.alloc(e.map_ext(arena, f))),
             Expr::Gen(ref r, ref e1, ref e2) => Expr::Gen(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
             Expr::LetIn(ref r, s, ref e1, ref e2) => Expr::LetIn(f(r), s, arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
             Expr::Pair(ref r, e1, e2) => Expr::Pair(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
@@ -84,9 +84,11 @@ impl<'a, 'b, R> PrettyExpr<'a, 'b, R> {
     fn for_expr(&self, other_expr: &'a Expr<'b, R>) -> PrettyExpr<'a, 'b, R> {
         PrettyExpr { interner: self.interner, expr: other_expr }
     }
-}
 
-impl<'a, 'b, R> PrettyExpr<'a, 'b, R> {
+    fn for_clock(&self, clock: &'a Clock) -> PrettyClock<'a> {
+        clock.pretty(self.interner)
+    }
+
     fn name(&self, s: Symbol) -> &'a str {
         self.interner.resolve(s).expect("encountered an symbol not corresponding to an identifier while pretty printing an expression")
     }
@@ -107,8 +109,8 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
                 write!(f, "Lam({}, {})", self.name(x), self.for_expr(e)),
             Expr::Force(_, ref e) =>
                 write!(f, "Force({})", self.for_expr(e)),
-            Expr::Lob(_, x, ref e) =>
-                write!(f, "Lob({}, {})", self.name(x), self.for_expr(e)),
+            Expr::Lob(_, ref clock, x, ref e) =>
+                write!(f, "Lob({}, {}, {})", self.for_clock(clock), self.name(x), self.for_expr(e)),
             Expr::Gen(_, ref eh, ref et) =>
                 write!(f, "Gen({}, {})", self.for_expr(eh), self.for_expr(et)),
             Expr::LetIn(_, x, e1, e2) =>

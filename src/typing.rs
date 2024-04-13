@@ -1,6 +1,7 @@
 use core::fmt;
 use std::collections::HashMap;
 
+use num::{One, rational::Ratio};
 use string_interner::DefaultStringInterner;
 
 use crate::expr::{Symbol, Expr, Value, PrettyExpr};
@@ -25,17 +26,49 @@ impl fmt::Display for ArraySize {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct Clock {
+    pub coeff: Ratio<u32>,
+    pub var: Symbol,
+}
+
+impl Clock {
+    pub fn pretty<'a>(&'a self, interner: &'a DefaultStringInterner) -> PrettyClock<'a> {
+        PrettyClock { interner, clock: self }
+    }
+}
+
+pub struct PrettyClock<'a> {
+    interner: &'a DefaultStringInterner,
+    clock: &'a Clock,
+}
+
+impl<'a> fmt::Display for PrettyClock<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.clock.coeff.is_one() {
+            write!(f, "{} ", self.clock.coeff)?;
+        }
+        write!(f, "{}", self.interner.resolve(self.clock.var).unwrap())
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Type {
     Unit,
     Sample,
     Index,
-    Stream(Box<Type>),
+    Stream(Clock, Box<Type>),
     Function(Box<Type>, Box<Type>),
     Product(Box<Type>, Box<Type>),
     Sum(Box<Type>, Box<Type>),
-    Later(Box<Type>),
+    Later(Clock, Box<Type>),
     Array(Box<Type>, ArraySize),
+}
+
+impl Type {
+    pub fn pretty<'a>(&'a self, interner: &'a DefaultStringInterner) -> PrettyType<'a> {
+        PrettyType { interner, ty: self }
+    }
 }
 
 fn parenthesize(f: &mut fmt::Formatter<'_>, p: bool, inner: impl FnOnce(&mut fmt::Formatter<'_>) -> fmt::Result) -> fmt::Result {
@@ -48,35 +81,69 @@ fn parenthesize(f: &mut fmt::Formatter<'_>, p: bool, inner: impl FnOnce(&mut fmt
     }
 }
 
-impl Type {
+pub struct PrettyType<'a> {
+    interner: &'a DefaultStringInterner,
+    ty: &'a Type,
+}
+
+impl<'a> PrettyType<'a> {
+    fn for_type(&self, ty: &'a Type) -> PrettyType<'a> {
+        PrettyType { ty, ..*self }
+    }
+
+    fn for_clock(&self, clock: &'a Clock) -> PrettyClock<'a> {
+        PrettyClock { clock, interner: self.interner }
+    }
+}
+
+impl<'a> PrettyType<'a> {
     fn fmt_prec(&self, f: &mut fmt::Formatter<'_>, prec: u8) -> fmt::Result {
-        match *self {
+        match *self.ty {
             Type::Unit =>
                 write!(f, "unit"),
             Type::Sample =>
                 write!(f, "sample"),
             Type::Index =>
                 write!(f, "index"),
-            Type::Stream(ref ty) =>
-                parenthesize(f, prec > 3, |f| { write!(f, "~")?; ty.fmt_prec(f, 3) }),
+            Type::Stream(ref clock, ref ty) =>
+                parenthesize(f, prec > 3, |f| {
+                    // oh GOD this syntax will be noisy
+                    write!(f, "~^({}) ", self.for_clock(clock))?;
+                    self.for_type(ty).fmt_prec(f, 3)
+                }),
             Type::Function(ref ty1, ref ty2) =>
-                parenthesize(f, prec > 0, |f| { ty1.fmt_prec(f, 1)?; write!(f, " -> ")?; ty2.fmt_prec(f, 0) }),
+                parenthesize(f, prec > 0, |f| {
+                    self.for_type(ty1).fmt_prec(f, 1)?;
+                    write!(f, " -> ")?;
+                    self.for_type(ty2).fmt_prec(f, 0)
+                }),
             Type::Product(ref ty1, ref ty2) =>
-                parenthesize(f, prec > 2, |f| { ty1.fmt_prec(f, 3)?; write!(f, " * ")?; ty2.fmt_prec(f, 2) }),
+                parenthesize(f, prec > 2, |f| {
+                    self.for_type(ty1).fmt_prec(f, 3)?;
+                    write!(f, " * ")?;
+                    self.for_type(ty2).fmt_prec(f, 2)
+                }),
             Type::Sum(ref ty1, ref ty2) =>
-                parenthesize(f, prec > 1, |f| { ty1.fmt_prec(f, 2)?; write!(f, " * ")?; ty2.fmt_prec(f, 1) }),
-            Type::Later(ref ty) =>
-                parenthesize(f, prec > 3, |f| { write!(f, "|>")?; ty.fmt_prec(f, 3) }),
+                parenthesize(f, prec > 1, |f| {
+                    self.for_type(ty1).fmt_prec(f, 2)?;
+                    write!(f, " * ")?;
+                    self.for_type(ty2).fmt_prec(f, 1)
+                }),
+            Type::Later(ref clock, ref ty) =>
+                parenthesize(f, prec > 3, |f| {
+                    write!(f, "|>^({})", self.for_clock(clock))?;
+                    self.for_type(ty).fmt_prec(f, 3)
+                }),
             Type::Array(ref ty, ref size) => {
                 write!(f, "[")?;
-                ty.fmt_prec(f, 0)?;
+                self.for_type(ty).fmt_prec(f, 0)?;
                 write!(f, "; {}]", size)
             },
         }
     }
 }
 
-impl fmt::Display for Type {
+impl<'a> fmt::Display for PrettyType<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.fmt_prec(f, 0)
     }
@@ -165,40 +232,44 @@ impl<'a, R> PrettyTypeError<'a, R> {
     fn for_expr(&self, expr: &'a Expr<'a, R>) -> PrettyExpr<'a, 'a, R> {
         expr.pretty(self.interner)
     }
+
+    fn for_type(&self, ty: &'a Type) -> PrettyType<'a> {
+        ty.pretty(self.interner)
+    }
 }
 
 impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self.error {
             TypeError::MismatchingTypes { expr, ref synth, ref expected } =>
-                write!(f, "found {} to have type {} but expected {}", self.for_expr(expr), synth, expected),
+                write!(f, "found {} to have type {} but expected {}", self.for_expr(expr), self.for_type(synth), self.for_type(expected)),
             TypeError::VariableNotFound { var, .. } =>
                 write!(f, "variable \"{}\" not found", self.interner.resolve(var).unwrap()),
             TypeError::BadArgument { ref arg_type, fun, arg, ref arg_err, .. } =>
                 write!(f, "found {} to take argument type {}, but argument {} does not have that type: {}",
-                       self.for_expr(fun), arg_type, self.for_expr(arg), self.for_error(arg_err)),
+                       self.for_expr(fun), self.for_type(arg_type), self.for_expr(arg), self.for_error(arg_err)),
             TypeError::NonFunctionApplication { purported_fun, ref actual_type, .. } =>
                 write!(f, "trying to call {}, but found it to have type {}, which is not a function type",
-                       self.for_expr(purported_fun), actual_type),
+                       self.for_expr(purported_fun), self.for_type(actual_type)),
             TypeError::Unsupported { expr } =>
                 write!(f, "oops haven't implemented typing rules for {} yet", self.for_expr(expr)),
             TypeError::BadAnnotation { expr, ref purported_type, ref err, .. } =>
-                write!(f, "bad annotation of expression {} as type {}: {}", self.for_expr(expr), purported_type, self.for_error(err)),
+                write!(f, "bad annotation of expression {} as type {}: {}", self.for_expr(expr), self.for_type(purported_type), self.for_error(err)),
             TypeError::LetFailure { var, expr, ref err, .. } =>
                 write!(f, "couldn't infer the type of variable {} from definition {}: {}",
                        self.interner.resolve(var).unwrap(), self.for_expr(expr), self.for_error(err)),
             TypeError::ForcingNonThunk { expr, ref actual_type, .. } =>
-                write!(f, "tried to force expression {} of type {}, which is not a thunk", self.for_expr(expr), actual_type),
+                write!(f, "tried to force expression {} of type {}, which is not a thunk", self.for_expr(expr), self.for_type(actual_type)),
             TypeError::UnPairingNonProduct { expr, ref actual_type, .. } =>
-                write!(f, "tried to unpair expression {} of type {}, which is not a product", self.for_expr(expr), actual_type),
+                write!(f, "tried to unpair expression {} of type {}, which is not a product", self.for_expr(expr), self.for_type(actual_type)),
             TypeError::CasingNonSum { expr, ref actual_type, .. } =>
-                write!(f, "tried to case on expression {} of type {}, which is not a sum", self.for_expr(expr), actual_type),
+                write!(f, "tried to case on expression {} of type {}, which is not a sum", self.for_expr(expr), self.for_type(actual_type)),
             TypeError::CouldNotUnify { ref type1, ref type2 } =>
-                write!(f, "could not unify types {} and {}", type1, type2),
+                write!(f, "could not unify types {} and {}", self.for_type(type1), self.for_type(type2)),
             TypeError::MismatchingArraySize { ref expected_size, found_size, .. } =>
                 write!(f, "expected array of size {} but found size {}", expected_size, found_size),
             TypeError::UnGenningNonStream { expr, ref actual_type, .. } =>
-                write!(f, "expected stream to ungen, but found {} of type {}", self.for_expr(expr), actual_type),
+                write!(f, "expected stream to ungen, but found {} of type {}", self.for_expr(expr), self.for_type(actual_type)),
         }
     }
 }
@@ -212,13 +283,13 @@ pub fn check<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Resul
             new_ctx.insert(x, (**ty1).clone());
             check(&new_ctx, e, ty2)
         },
-        (_, &Expr::Lob(_, x, e)) => {
+        (_, &Expr::Lob(_, clock, x, e)) => {
             let mut new_ctx = ctx.clone();
-            new_ctx.insert(x, Type::Later(Box::new(ty.clone())));
+            new_ctx.insert(x, Type::Later(clock, Box::new(ty.clone())));
             check(&new_ctx, e, ty)
         },
         // if we think of streams as infinitary products, it makes sense to *check* their introduction, right?
-        (&Type::Stream(ref ty1), &Expr::Gen(_, eh, et)) => {
+        (&Type::Stream(clock, ref ty1), &Expr::Gen(_, eh, et)) => {
             // TODO: probably change once we figure out the stream semantics we actually want
             check(&ctx, eh, ty1)?;
             check(&ctx, et, ty)
@@ -322,7 +393,8 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
             },
         &Expr::Force(ref r, e1) =>
             match synthesize(ctx, e1)? {
-                Type::Later(ty) => Ok(*ty),
+                // TODO: obviously need more checking here
+                Type::Later(_, ty) => Ok(*ty),
                 // TODO: add error here
                 ty => Err(TypeError::forcing_non_thunk(r.clone(), e1, ty)),
             },
@@ -365,8 +437,8 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
             },
         &Expr::UnGen(ref r, e) =>
             match synthesize(ctx, e)? {
-                Type::Stream(ty) =>
-                    Ok(Type::Product(ty.clone(), Box::new(Type::Later(Box::new(Type::Stream(ty)))))),
+                Type::Stream(clock, ty) =>
+                    Ok(Type::Product(ty.clone(), Box::new(Type::Later(clock, Box::new(Type::Stream(clock, ty)))))),
                 ty =>
                     Err(TypeError::UnGenningNonStream { range: r.clone(), expr: e, actual_type: ty }),
             }

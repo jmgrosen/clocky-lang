@@ -34,5 +34,15 @@
     "bindings/node/*",
     "queries/*",
     "src/**"
+  ],
+  "tree-sitter": [
+    {
+      "scope": "source.lamlis",
+      "file-types": [
+        "ll"
+      ],
+      "injection-regex": "lamlis",
+      "highlights": "queries/highlights.scm"
+    }
   ]
 }

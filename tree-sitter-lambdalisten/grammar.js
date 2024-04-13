@@ -37,7 +37,7 @@ module.exports = grammar({
 
         lambda_expression: $ => prec.right(seq('\\', $.identifier, '.', $.expression)),
 
-        lob_expression: $ => prec.right(seq('&', $.identifier, '.', $.expression)),
+        lob_expression: $ => prec.right(seq('&', '^', '(', $.clock, ')', $.identifier, '.', $.expression)),
 
         force_expression: $ => prec(2, seq('!', $.expression)),
 
@@ -70,7 +70,8 @@ module.exports = grammar({
             $.stream_type,
             $.product_type,
             $.sum_type,
-            $.array_type
+            $.array_type,
+            $.later_type
         ),
 
         wrap_type: $ => seq('(', $.type, ')'),
@@ -83,7 +84,7 @@ module.exports = grammar({
 
         function_type: $ => prec.right(seq($.type, '->', $.type)),
 
-        stream_type: $ => prec(3, seq('~', $.type)),
+        stream_type: $ => prec(3, seq('~', '^', '(', $.clock, ')', $.type)),
 
         product_type: $ => prec.right(2, seq($.type, '*', $.type)),
 
@@ -91,6 +92,12 @@ module.exports = grammar({
 
         array_type: $ => seq('[', $.type, ';', $.size, ']'),
 
-        size: $ => /[\d]+/
+        later_type: $ => prec(3, seq('|>', '^', '(', $.clock, ')', $.type)),
+
+        size: $ => /[\d]+/,
+
+        clock: $ => choice($.identifier, seq($.clock_coeff, $.identifier)),
+
+        clock_coeff: $ => choice(/[\d]+/, seq(/[\d]+/, "/", /[\d]+/))
     }
 });
