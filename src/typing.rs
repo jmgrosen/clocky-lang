@@ -1,5 +1,6 @@
 use core::fmt;
 use std::collections::HashMap;
+use std::cmp::Ordering;
 
 use num::{One, rational::Ratio};
 use string_interner::DefaultStringInterner;
@@ -32,9 +33,39 @@ pub struct Clock {
     pub var: Symbol,
 }
 
+impl PartialOrd for Clock {
+    fn partial_cmp(&self, other: &Clock) -> Option<Ordering> {
+        if self.var == other.var {
+            Some(self.coeff.cmp(&other.coeff))
+        } else {
+            None
+        }
+    }
+}
+
 impl Clock {
     pub fn pretty<'a>(&'a self, interner: &'a DefaultStringInterner) -> PrettyClock<'a> {
         PrettyClock { interner, clock: self }
+    }
+
+    /*
+    // TODO: figure out better name for this
+    pub fn compose(&self, other: &Clock) -> Option<Clock> {
+        if self.var == other.var {
+            Some(Clock { coeff: (self.coeff.recip() + other.coeff.recip()).recip(), var: self.var })
+        } else {
+            None
+        }
+    }
+    */
+
+    // TODO: figure out better name for this
+    pub fn uncompose(&self, other: &Clock) -> Option<Clock> {
+        if self.var == other.var {
+            Some(Clock { coeff: (self.coeff.recip() - other.coeff.recip()).recip(), var: self.var })
+        } else {
+            None
+        }
     }
 }
 
@@ -69,6 +100,16 @@ impl Type {
     pub fn pretty<'a>(&'a self, interner: &'a DefaultStringInterner) -> PrettyType<'a> {
         PrettyType { interner, ty: self }
     }
+
+    /*
+    fn later(clock: Clock, ty: Type) -> Type {
+        if clock.coeff.is_zero() {
+            ty
+        } else {
+            Type::Later(clock, Box::new(ty))
+        }
+    }
+    */
 }
 
 fn parenthesize(f: &mut fmt::Formatter<'_>, p: bool, inner: impl FnOnce(&mut fmt::Formatter<'_>) -> fmt::Result) -> fmt::Result {
@@ -157,7 +198,7 @@ pub enum TypeError<'a, R> {
     VariableNotFound { range: R, var: Symbol },
     BadArgument { range: R, arg_type: Type, fun: &'a Expr<'a, R>, arg: &'a Expr<'a, R>, arg_err: Box<TypeError<'a, R>> },
     NonFunctionApplication { range: R, purported_fun: &'a Expr<'a, R>, actual_type: Type },
-    Unsupported { expr: &'a Expr<'a, R> },
+    SynthesisUnsupported { expr: &'a Expr<'a, R> },
     BadAnnotation { range: R, expr: &'a Expr<'a, R>, purported_type: Type, err: Box<TypeError<'a, R>> },
     LetSynthFailure { range: R, var: Symbol, expr: &'a Expr<'a, R>, err: Box<TypeError<'a, R>> },
     LetCheckFailure { range: R, var: Symbol, expected_type: Type, expr: &'a Expr<'a, R>, err: Box<TypeError<'a, R>> },
@@ -186,8 +227,8 @@ impl<'a, R> TypeError<'a, R> {
         TypeError::NonFunctionApplication { range, purported_fun, actual_type }
     }
 
-    fn unsupported(expr: &'a Expr<'a, R>) -> TypeError<'a, R> {
-        TypeError::Unsupported { expr }
+    fn synthesis_unsupported(expr: &'a Expr<'a, R>) -> TypeError<'a, R> {
+        TypeError::SynthesisUnsupported { expr }
     }
 
     fn bad_annotation(range: R, expr: &'a Expr<'a, R>, purported_type: Type, err: TypeError<'a, R>) -> TypeError<'a, R> {
@@ -252,8 +293,8 @@ impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
             TypeError::NonFunctionApplication { purported_fun, ref actual_type, .. } =>
                 write!(f, "trying to call {}, but found it to have type {}, which is not a function type",
                        self.for_expr(purported_fun), self.for_type(actual_type)),
-            TypeError::Unsupported { expr } =>
-                write!(f, "oops haven't implemented typing rules for {} yet", self.for_expr(expr)),
+            TypeError::SynthesisUnsupported { expr } =>
+                write!(f, "don't know how to implement synthesis for {} yet", self.for_expr(expr)),
             TypeError::BadAnnotation { expr, ref purported_type, ref err, .. } =>
                 write!(f, "bad annotation of expression {} as type {}: {}", self.for_expr(expr), self.for_type(purported_type), self.for_error(err)),
             TypeError::LetCheckFailure { var, expr, ref expected_type, ref err, .. } =>
@@ -365,7 +406,7 @@ pub fn check<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Resul
             },
         (_, _) => {
             let synthesized = synthesize(ctx, expr)?;
-            if synthesized == *ty {
+            if subtype(ctx, &synthesized, ty) {
                 Ok(())
             } else {
                 Err(TypeError::mismatching(expr, synthesized, ty.clone()))
@@ -462,7 +503,7 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
                     ctx2.insert(x2, *ty2);
                     let ty_out2 = synthesize(&ctx2, e2)?;
 
-                    meet(ty_out1, ty_out2)
+                    meet(ctx, ty_out1, ty_out2)
                 },
                 ty =>
                     Err(TypeError::casing_non_sum(r.clone(), e0, ty)),
@@ -475,12 +516,59 @@ pub fn synthesize<'a, R: Clone>(ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type
                     Err(TypeError::UnGenningNonStream { range: r.clone(), expr: e, actual_type: ty }),
             }
         _ =>
-            Err(TypeError::unsupported(expr)),
+            Err(TypeError::synthesis_unsupported(expr)),
     }
 }
 
-fn meet<'a, R>(ty1: Type, ty2: Type) -> Result<Type, TypeError<'a, R>> {
-    if ty1 == ty2 {
+// at the moment this implements an equivalence relation, but we'll
+// probably want it to be proper subtyping at some point, so let's
+// just call it that
+//
+// terminating: the sum of the sizes of the types decreases
+fn subtype(ctx: &Ctx, ty1: &Type, ty2: &Type) -> bool {
+    match (ty1, ty2) {
+        (&Type::Unit, &Type::Unit) =>
+            true,
+        (&Type::Sample, &Type::Sample) =>
+            true,
+        (&Type::Index, &Type::Index) =>
+            true,
+        (&Type::Stream(ref c1, ref ty1p), &Type::Stream(ref c2, ref ty2p)) =>
+            c1 == c2 && subtype(ctx, ty1p, ty2p),
+        (&Type::Function(ref ty1a, ref ty1b), &Type::Function(ref ty2a, ref ty2b)) =>
+            subtype(ctx, ty2a, ty1a) && subtype(ctx, ty1b, ty2b),
+        (&Type::Product(ref ty1a, ref ty1b), &Type::Product(ref ty2a, ref ty2b)) =>
+            subtype(ctx, ty1a, ty2a) && subtype(ctx, ty1b, ty2b),
+        (&Type::Sum(ref ty1a, ref ty1b), &Type::Sum(ref ty2a, ref ty2b)) =>
+            subtype(ctx, ty1a, ty2a) && subtype(ctx, ty1b, ty2b),
+        (&Type::Later(ref c1, ref ty1p), &Type::Later(ref c2, ref ty2p)) =>
+            match c1.partial_cmp(c2) {
+                Some(Ordering::Less) => {
+                    // unwrap safety: we've already verified that c1 < c2
+                    let rem = c1.uncompose(c2).unwrap();
+                    subtype(ctx, &Type::Later(rem, ty1p.clone()), ty2p)
+                },
+                Some(Ordering::Equal) =>
+                    subtype(ctx, ty1p, ty2p),
+                Some(Ordering::Greater) => {
+                    // unwrap safety: we've already verified that c2 < c1
+                    let rem = c2.uncompose(c1).unwrap();
+                    subtype(ctx, ty1p, &Type::Later(rem, ty2p.clone()))
+                },
+                None =>
+                    false,
+            }
+        (&Type::Array(ref ty1p, ref n1), &Type::Array(ref ty2p, ref n2)) =>
+            subtype(ctx, ty1p, ty2p) && n1 == n2,
+        (_, _) =>
+            false,
+    }
+}
+
+fn meet<'a, R>(ctx: &Ctx, ty1: Type, ty2: Type) -> Result<Type, TypeError<'a, R>> {
+    if subtype(ctx, &ty1, &ty2) {
+        Ok(ty2)
+    } else if subtype(ctx, &ty2, &ty1) {
         Ok(ty1)
     } else {
         Err(TypeError::could_not_unify(ty1, ty2))
