@@ -33,6 +33,10 @@ enum Command {
     /// Parse the given program, printing the attempted parse tree if unable
     Parse {
         file: Option<PathBuf>,
+
+        /// Dump the dot graph of the tree sitter parse tree
+        #[arg(long)]
+        dump_to: Option<PathBuf>,
     },
     /// Type-check the given program.
     TypeCheck {
@@ -133,7 +137,7 @@ impl<'a> From<hound::Error> for TopLevelError<'a> {
 
 type TopLevelResult<'a, T> = Result<T, TopLevelError<'a>>;
 
-fn cmd_parse<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
+fn cmd_parse<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>, dump_to: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
     match toplevel.parser.parse(&code) {
         Ok(expr) => {
@@ -141,7 +145,10 @@ fn cmd_parse<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>) -> TopL
         },
         Err(parse::FullParseError { tree, error }) => {
             eprintln!("{:?}", error);
-            tree.print_dot_graph(&std::io::stdout());
+            if let Some(dump_path) = dump_to {
+                let dump_file = File::create(dump_path)?;
+                tree.print_dot_graph(&dump_file);
+            }
         },
     }
     Ok(())
@@ -280,7 +287,7 @@ fn main() -> std::io::Result<()> {
     let mut toplevel = TopLevel { parser, ctx };
 
     let res = match args.cmd {
-        Command::Parse { file } => cmd_parse(&mut toplevel, file),
+        Command::Parse { file, dump_to } => cmd_parse(&mut toplevel, file, dump_to),
         Command::TypeCheck { file } => cmd_typecheck(&mut toplevel, file),
         Command::Interpret { file } => cmd_interpret(&mut toplevel, file),
         Command::Repl => cmd_repl(&mut toplevel),

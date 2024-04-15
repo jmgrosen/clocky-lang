@@ -111,6 +111,7 @@ pub enum ParseError {
     ExpectedType(tree_sitter::Range),
     UnknownNodeType(tree_sitter::Range, String),
     BadCoefficient(tree_sitter::Range),
+    UhhhhhhWhat(tree_sitter::Range, String),
 }
 
 struct AbstractionContext<'a, 'b, 'c> {
@@ -188,7 +189,10 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                         let ty = self.parse_type(node.child(3).unwrap())?;
                         (Some(ty), 5, 7)
                     },
-                    n => panic!("how does a let expression have {} children??", n),
+                    n => {
+                        let msg = format!("how does a let expression have {} children??", n);
+                        return Err(ParseError::UhhhhhhWhat(node.range(), msg));
+                    },
                 };
                 let e1 = self.parse_expr(node.child(e1_idx).unwrap())?;
                 let e2 = self.parse_expr(node.child(e2_idx).unwrap())?;
@@ -338,7 +342,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
     }
 
     fn parse_clock_coeff(&mut self, node: tree_sitter::Node<'_>) -> Result<Ratio<u32>, ParseError> {
-        if node.child_count() == 1 {
+        if node.child_count() == 0 {
             let n = self.node_text(node).parse().map_err(|_| ParseError::BadCoefficient(node.range()))?;
             Ok(Ratio::from_integer(n))
         } else {
