@@ -19,6 +19,7 @@ mod typing;
 use builtin::make_builtins;
 use interp::get_samples;
 use parse::Parser;
+use typing::{Globals, Typechecker, Ctx};
 
 use crate::typing::Type;
 
@@ -76,7 +77,7 @@ fn read_file(name: Option<&Path>) -> std::io::Result<String> {
 
 struct TopLevel<'a, 'b> {
     parser: Parser<'a, 'b>,
-    ctx: typing::Ctx,
+    checker: Typechecker,
 }
 
 #[derive(Debug)]
@@ -161,7 +162,7 @@ fn cmd_typecheck<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>) -> 
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
     let expr = toplevel.parser.arena.alloc(expr);
-    let ty = typing::synthesize(&toplevel.ctx, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
+    let ty = toplevel.checker.synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
     println!("synthesized type: {}", ty.pretty(&toplevel.parser.interner));
     Ok(())
 }
@@ -173,7 +174,7 @@ fn cmd_interpret<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>) -> 
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
     let expr = toplevel.parser.arena.alloc(expr);
-    let ty = typing::synthesize(&toplevel.ctx, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
+    let ty = toplevel.checker.synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
     println!("synthesized type: {}", ty.pretty(&toplevel.parser.interner));
 
     let arena = Arena::new();
@@ -195,7 +196,7 @@ fn repl_one<'a>(toplevel: &mut TopLevel<'_, 'a>, interp_ctx: &interp::Interpreta
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
     let expr = toplevel.parser.arena.alloc(expr);
-    let ty = typing::synthesize(&toplevel.ctx, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
+    let ty = toplevel.checker.synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
     println!("synthesized type: {}", ty.pretty(&toplevel.parser.interner));
 
     let arena = Arena::new();
@@ -235,7 +236,7 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>, length
     };
     let expr = toplevel.parser.arena.alloc(expr);
 
-    match typing::synthesize(&toplevel.ctx, expr).map_err(|e| TopLevelError::TypeError(code, e))? {
+    match toplevel.checker.synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))? {
         Type::Stream(_, ty) if *ty == Type::Sample => { },
         ty => { return Err(TopLevelError::CannotSample(ty)); },
     }
@@ -269,7 +270,7 @@ fn main() -> std::io::Result<()> {
     let args = Args::parse();
     let annot_arena = Arena::new();
     let mut interner = StringInterner::new();
-    let mut ctx: typing::Ctx = HashMap::new();
+    let mut globals: Globals = HashMap::new();
 
     // TODO: move this to the builtins themselves
     let add = interner.get_or_intern_static("add");
@@ -277,14 +278,15 @@ fn main() -> std::io::Result<()> {
     let mul = interner.get_or_intern_static("mul");
     let pi = interner.get_or_intern_static("pi");
     let sin = interner.get_or_intern_static("sin");
-    ctx.insert(add, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
-    ctx.insert(div, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
-    ctx.insert(mul, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
-    ctx.insert(pi, typing::Type::Sample);
-    ctx.insert(sin, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
+    globals.insert(add, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
+    globals.insert(div, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
+    globals.insert(mul, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
+    globals.insert(pi, typing::Type::Sample);
+    globals.insert(sin, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
 
+    let checker = Typechecker { globals };
     let parser = Parser::new(&mut interner, &annot_arena);
-    let mut toplevel = TopLevel { parser, ctx };
+    let mut toplevel = TopLevel { parser, checker };
 
     let res = match args.cmd {
         Command::Parse { file, dump_to } => cmd_parse(&mut toplevel, file, dump_to),
