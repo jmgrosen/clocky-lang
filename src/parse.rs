@@ -55,6 +55,9 @@ make_node_enum!(ConcreteNode {
     ArrayInner: array_inner,
     UnGenExpression: ungen_expression,
     UnitExpression: unit_expression,
+    DelayExpression: delay_expression,
+    BoxExpression: box_expression,
+    UnboxExpression: unbox_expression,
     Type: type,
     WrapType: wrap_type,
     BaseType: base_type,
@@ -63,7 +66,8 @@ make_node_enum!(ConcreteNode {
     ProductType: product_type,
     SumType: sum_type,
     ArrayType: array_type,
-    LaterType: later_type
+    LaterType: later_type,
+    BoxType: box_type
 } with matcher ConcreteNodeMatcher);
 
 pub struct Parser<'a, 'b> {
@@ -257,6 +261,18 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             },
             Some(ConcreteNode::UnitExpression) =>
                 Ok(Expr::Val(node.range(), Value::Unit)),
+            Some(ConcreteNode::DelayExpression) => {
+                let e = self.parse_expr(node.child(1).unwrap())?;
+                Ok(Expr::Delay(node.range(), self.alloc(e)))
+            },
+            Some(ConcreteNode::BoxExpression) => {
+                let e = self.parse_expr(node.child(1).unwrap())?;
+                Ok(Expr::Box(node.range(), self.alloc(e)))
+            },
+            Some(ConcreteNode::UnboxExpression) => {
+                let e = self.parse_expr(node.child(1).unwrap())?;
+                Ok(Expr::Unbox(node.range(), self.alloc(e)))
+            },
             Some(ConcreteNode::Type) |
             Some(ConcreteNode::BaseType) |
             Some(ConcreteNode::StreamType) |
@@ -266,6 +282,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             Some(ConcreteNode::ArrayType) |
             Some(ConcreteNode::ArrayInner) |
             Some(ConcreteNode::LaterType) |
+            Some(ConcreteNode::BoxType) |
             Some(ConcreteNode::FunctionType) =>
                 Err(ParseError::ExpectedExpression(node.range())),
             None => 
@@ -316,6 +333,10 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let clock = self.parse_clock(node.child(3).unwrap())?;
                 let ty = self.parse_type(node.child(5).unwrap())?;
                 Ok(Type::Later(clock, Box::new(ty)))
+            },
+            Some(ConcreteNode::BoxType) => {
+                let ty = self.parse_type(node.child(1).unwrap())?;
+                Ok(Type::Box(Box::new(ty)))
             },
             Some(_) =>
                 Err(ParseError::ExpectedType(node.range())),

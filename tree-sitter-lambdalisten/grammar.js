@@ -23,7 +23,10 @@ module.exports = grammar({
             $.case_expression,
             $.array_expression,
             $.ungen_expression,
-            $.unit_expression
+            $.unit_expression,
+            $.delay_expression,
+            $.box_expression,
+            $.unbox_expression
         ),
 
         wrap_expression: $ => seq('(', $.expression, ')'),    
@@ -66,6 +69,12 @@ module.exports = grammar({
 
         unit_expression: $ => '()',
 
+        delay_expression: $ => prec(2, seq('`', $.expression)),
+
+        box_expression: $ => prec(2, seq('box', $.expression)),
+
+        unbox_expression: $ => prec(2, seq('unbox', $.expression)),
+
         type: $ => choice(
             $.wrap_type,
             $.base_type,
@@ -74,7 +83,8 @@ module.exports = grammar({
             $.product_type,
             $.sum_type,
             $.array_type,
-            $.later_type
+            $.later_type,
+            $.box_type
         ),
 
         wrap_type: $ => seq('(', $.type, ')'),
@@ -96,6 +106,8 @@ module.exports = grammar({
         array_type: $ => seq('[', $.type, ';', $.size, ']'),
 
         later_type: $ => prec(3, seq('|>', '^', '(', $.clock, ')', $.type)),
+
+        box_type: $ => prec(3, seq('[]', $.type)),
 
         size: $ => /[\d]+/,
 

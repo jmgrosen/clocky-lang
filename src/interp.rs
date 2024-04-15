@@ -66,14 +66,17 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
             interp(&ctx.with_env(env1), &*ebody)
         },
         Expr::Lob(_, _, s, ref e) => {
-            let susp = Value::Suspend(ctx.env.clone(), expr);
+            // TODO: is this really the right semantics?
+            let boxed = Value::BoxDelay(ctx.env.clone(), expr);
             let mut new_env = ctx.env.clone();
-            new_env.insert(s, susp);
+            new_env.insert(s, boxed);
             interp(&ctx.with_env(new_env), e)
         },
         Expr::Gen(_, ref eh, ref et) => {
             let vh = interp(ctx, eh)?;
-            Ok(Value::Gen(ctx.env.clone(), Box::new(vh), et))
+            // now this is expected to result in some sort of fix expression or smth
+            let vt = interp(ctx, et)?;
+            Ok(Value::Gen(Box::new(vh), Box::new(vt)))
         },
         Expr::LetIn(_, x, _, e1, e2) => {
             let v = interp(ctx, e1)?;
@@ -123,10 +126,23 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
         },
         Expr::UnGen(_, e) =>
             match interp(ctx, e)? {
-                Value::Gen(new_env, v_hd, e_tl) =>
-                    Ok(Value::Pair(v_hd, Box::new(Value::Suspend(new_env, e_tl)))),
+                Value::Gen(v_hd, v_tl) =>
+                    Ok(Value::Pair(v_hd, v_tl)),
                 _ =>
                     Err("tried to ungen a non-gen"),
+            },
+        Expr::Delay(_, e) =>
+            Ok(Value::Suspend(ctx.env.clone(), e)),
+        Expr::Box(_, e) =>
+            Ok(Value::Box(ctx.env.clone(), e)),
+        Expr::Unbox(_, e) =>
+            match interp(ctx, e)? {
+                Value::Box(new_env, e_body) =>
+                    interp(&ctx.with_env(new_env), e_body),
+                Value::BoxDelay(new_env, e_body) =>
+                    Ok(Value::Suspend(new_env, e_body)),
+                _ =>
+                    Err("tried to unbox a non-box"),
             },
     }
 }
@@ -135,13 +151,15 @@ pub fn get_samples<'a>(builtins: &'a BuiltinsMap, mut expr: &'a Expr<'a, ()>, ou
     let mut ctx = InterpretationContext { builtins, env: Env::new() };
     for (i, s_out) in out.iter_mut().enumerate() {
         match interp(&ctx, expr) {
-            Ok(Value::Gen(new_env, head, next_expr)) => {
-                if let Value::Sample(s) = *head {
-                    ctx.env = new_env;
-                    *s_out = s;
-                    expr = next_expr;
-                } else {
-                    return Err(format!("on index {i}, evaluation succeeded with a Gen but got head {head:?}"));
+            Ok(Value::Gen(head, tail)) => {
+                match (*head, *tail) {
+                    (Value::Sample(s), Value::Suspend(new_env, next_expr)) => {
+                        ctx.env = new_env;
+                        *s_out = s;
+                        expr = next_expr;
+                    },
+                    (h, t) =>
+                        return Err(format!("on index {i}, evaluation succeeded with a Gen but got head {h:?} and tail {t:?}")),
                 }
             },
             Ok(v) => {

@@ -17,11 +17,14 @@ pub enum Value<'a> {
     Pair(Box<Value<'a>>, Box<Value<'a>>),
     InL(Box<Value<'a>>),
     InR(Box<Value<'a>>),
-    Gen(Env<'a>, Box<Value<'a>>, &'a Expr<'a, ()>),
+    Gen(Box<Value<'a>>, Box<Value<'a>>),
     Closure(Env<'a>, Symbol, &'a Expr<'a, ()>),
     Suspend(Env<'a>, &'a Expr<'a, ()>),
     BuiltinPartial(Builtin, Box<[Value<'a>]>),
     Array(Box<[Value<'a>]>),
+    Box(Env<'a>, &'a Expr<'a, ()>),
+    // TODO: this is a bit of a hack
+    BoxDelay(Env<'a>, &'a Expr<'a, ()>),
 }
 
 // TODO: use a better type here... eventually we should resolve symbols and just use de bruijn offsets or similar...
@@ -46,6 +49,9 @@ pub enum Expr<'a, R> {
     Case(R, &'a Expr<'a, R>, Symbol, &'a Expr<'a, R>, Symbol, &'a Expr<'a, R>),
     Array(R, Box<[&'a Expr<'a, R>]>),
     UnGen(R, &'a Expr<'a, R>),
+    Delay(R, &'a Expr<'a, R>),
+    Box(R, &'a Expr<'a, R>),
+    Unbox(R, &'a Expr<'a, R>),
 }
 
 impl<'a, R> Expr<'a, R> {
@@ -67,6 +73,9 @@ impl<'a, R> Expr<'a, R> {
             Expr::Case(ref r, e0, s1, e1, s2, e2) => Expr::Case(f(r), arena.alloc(e0.map_ext(arena, f)), s1, arena.alloc(e1.map_ext(arena, f)), s2, arena.alloc(e2.map_ext(arena, f))),
             Expr::Array(ref r, ref es) => Expr::Array(f(r), es.iter().map(|e| &*arena.alloc(e.map_ext(arena, f))).collect::<Vec<_>>().into()),
             Expr::UnGen(ref r, ref e) => Expr::UnGen(f(r), arena.alloc(e.map_ext(arena, f))),
+            Expr::Delay(ref r, ref e) => Expr::Delay(f(r), arena.alloc(e.map_ext(arena, f))),
+            Expr::Box(ref r, ref e) => Expr::Box(f(r), arena.alloc(e.map_ext(arena, f))),
+            Expr::Unbox(ref r, ref e) => Expr::Unbox(f(r), arena.alloc(e.map_ext(arena, f))),
         }
     }
 
@@ -145,6 +154,12 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
             },
             Expr::UnGen(_, ref e) =>
                 write!(f, "UnGen({})", self.for_expr(e)),
+            Expr::Delay(_, ref e) =>
+                write!(f, "Delay({})", self.for_expr(e)),
+            Expr::Box(_, ref e) =>
+                write!(f, "Box({})", self.for_expr(e)),
+            Expr::Unbox(_, ref e) =>
+                write!(f, "Unbox({})", self.for_expr(e)),
         }
     }
 }

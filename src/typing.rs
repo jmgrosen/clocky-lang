@@ -271,6 +271,28 @@ impl Ctx {
     fn with_var(self, x: Symbol, ty: Type) -> Ctx {
         Ctx::Var(x, ty, Rc::new(self))
     }
+
+    // TODO: optimize this for the case that it's kept the same?
+    fn box_strengthen(&self) -> Ctx {
+        match *self {
+            Ctx::Empty => Ctx::Empty,
+            Ctx::Tick(_, ref next) => next.box_strengthen(),
+            Ctx::Var(x, ref ty, ref next) =>
+                if ty.is_stable() {
+                    Ctx::Var(x, ty.clone(), Rc::new(next.box_strengthen()))
+                } else {
+                    next.box_strengthen()
+                },
+        }
+    }
+
+    fn strip_tick(&self) -> Option<(Clock, Ctx)> {
+        match *self {
+            Ctx::Empty => None,
+            Ctx::Tick(clock, ref next) => Some((clock, (**next).clone())),
+            Ctx::Var(_, _, ref next) => next.strip_tick(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -290,6 +312,9 @@ pub enum TypeError<'a, R> {
     MismatchingArraySize { range: R, expected_size: ArraySize, found_size: usize },
     UnGenningNonStream { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
     VariableTimingBad { range: R, var: Symbol, timing: Vec<Clock>, var_type: Type },
+    ForcingWithNoTick { range: R, expr: &'a Expr<'a, R> },
+    ForcingMismatchingClock { range: R, expr: &'a Expr<'a, R>, stripped_clock: Clock, synthesized_clock: Clock, remaining_type: Type },
+    UnboxingNonBox { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
 }
 
 impl<'a, R> TypeError<'a, R> {
@@ -364,6 +389,10 @@ impl<'a, R> PrettyTypeError<'a, R> {
     fn for_timing(&self, timing: &'a [Clock]) -> PrettyTiming<'a> {
         PrettyTiming { interner: self.interner, timing }
     }
+
+    fn for_clock(&self, clock: &'a Clock) -> PrettyClock<'a> {
+        PrettyClock { interner: self.interner, clock }
+    }
 }
 
 impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
@@ -403,7 +432,15 @@ impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
                 write!(f, "expected stream to ungen, but found {} of type {}", self.for_expr(expr), self.for_type(actual_type)),
             TypeError::VariableTimingBad { var, ref timing, ref var_type, .. } =>
                 write!(f, "found use of variable {}, but it has timing {} and non-stable type {}",
-                       self.interner.resolve(var).unwrap(), self.for_timing(timing), self.for_type(var_type))
+                       self.interner.resolve(var).unwrap(), self.for_timing(timing), self.for_type(var_type)),
+            TypeError::ForcingWithNoTick { expr, .. } =>
+                write!(f, "trying to force expression {}, but there is no tick in the context!", self.for_expr(expr)),
+            TypeError::ForcingMismatchingClock { expr, stripped_clock, synthesized_clock, ref remaining_type, .. } =>
+                write!(f, "trying to force expression {} of type {}, but the most recent tick in the context has clock {}",
+                       self.for_expr(expr), self.for_type(&Type::Later(synthesized_clock, Box::new(remaining_type.clone()))), self.for_clock(&stripped_clock)),
+            TypeError::UnboxingNonBox { expr, ref actual_type, .. } =>
+                write!(f, "trying to unbox expression {}, but found it has type {}, which is not a box",
+                       self.for_expr(expr), self.for_type(actual_type)),
         }
     }
 }
@@ -411,6 +448,17 @@ impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
 pub struct Typechecker {
     pub globals: Globals,
 }
+
+
+// rules to port/verify:
+// - [X] delay
+// - [X] adv
+// - [X] unbox
+// - [X] box
+// - [X] gen
+// - [X] ungen
+// - [ ] proj?
+// - [X] fix
 
 impl Typechecker {
     pub fn check<'a, R: Clone>(&self, ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Result<(), TypeError<'a, R>> {
@@ -422,14 +470,15 @@ impl Typechecker {
                 self.check(&new_ctx, e, ty2)
             },
             (_, &Expr::Lob(_, clock, x, e)) => {
-                let new_ctx = ctx.clone().with_var(x, Type::Later(clock, Box::new(ty.clone())));
+                let rec_ty = Type::Box(Box::new(Type::Later(clock, Box::new(ty.clone()))));
+                let new_ctx = ctx.box_strengthen().with_var(x, rec_ty);
                 self.check(&new_ctx, e, ty)
             },
             // if we think of streams as infinitary products, it makes sense to *check* their introduction, right?
-            (&Type::Stream(_clock, ref ty1), &Expr::Gen(_, eh, et)) => {
+            (&Type::Stream(clock, ref ty1), &Expr::Gen(_, eh, et)) => {
                 // TODO: probably change once we figure out the stream semantics we actually want
                 self.check(&ctx, eh, ty1)?;
-                self.check(&ctx, et, ty)
+                self.check(&ctx, et, &Type::Later(clock, Box::new(ty.clone())))
             },
             (_, &Expr::LetIn(ref r, x, None, e1, e2)) =>
                 match self.synthesize(ctx, e1) {
@@ -491,6 +540,12 @@ impl Typechecker {
                     }
                     Ok(())
                 },
+            (&Type::Later(clock, ref ty), &Expr::Delay(_, e)) => {
+                let new_ctx = Ctx::Tick(clock, Rc::new(ctx.clone()));
+                self.check(&new_ctx, e, ty)
+            },
+            (&Type::Box(ref ty), &Expr::Box(_, e)) =>
+                self.check(&ctx.box_strengthen(), e, ty),
             (_, _) => {
                 let synthesized = self.synthesize(ctx, expr)?;
                 if subtype(ctx, &synthesized, ty) {
@@ -509,15 +564,7 @@ impl Typechecker {
                     Value::Unit => Ok(Type::Unit),
                     Value::Sample(_) => Ok(Type::Sample),
                     Value::Index(_) => Ok(Type::Index),
-                    Value::Gen(_, _, _) |
-                    Value::Closure(_, _, _) |
-                    Value::Suspend(_, _) |
-                    Value::Pair(_, _) |
-                    Value::InL(_) |
-                    Value::InR(_) |
-                    Value::Array(_) |
-                    Value::BuiltinPartial(_, _) =>
-                        panic!("trying to type {v:?} but that kind of value shouldn't be created yet?"),
+                    _ => panic!("trying to type {v:?} but that kind of value shouldn't be created yet?"),
                 }
             &Expr::Var(ref r, x) =>
                 if let Some((timing, ty)) = ctx.lookup(x) {
@@ -552,13 +599,27 @@ impl Typechecker {
                     ty =>
                         Err(TypeError::non_function_application(r.clone(), e1, ty)),
                 },
-            &Expr::Force(ref r, e1) =>
-                match self.synthesize(ctx, e1)? {
-                    // TODO: obviously need more checking here
-                    Type::Later(_, ty) => Ok(*ty),
-                    // TODO: add error here
+            &Expr::Force(ref r, e1) => {
+                // TODO: something fancier here?
+                let Some((stripped_clock, stripped_ctx)) = ctx.strip_tick() else {
+                    return Err(TypeError::ForcingWithNoTick { range: r.clone(), expr: e1 });
+                };
+                match self.synthesize(&stripped_ctx, e1)? {
+                    Type::Later(synthesized_clock, ty) =>
+                        if stripped_clock == synthesized_clock {
+                            Ok(*ty)
+                        } else {
+                            Err(TypeError::ForcingMismatchingClock {
+                                range: r.clone(),
+                                expr: e1,
+                                stripped_clock,
+                                synthesized_clock,
+                                remaining_type: *ty,
+                            })
+                        },
                     ty => Err(TypeError::forcing_non_thunk(r.clone(), e1, ty)),
-                },
+                }
+            },
             &Expr::LetIn(ref r, x, None, e1, e2) =>
                 match self.synthesize(ctx, e1) {
                     Ok(ty_x) => {
@@ -613,6 +674,13 @@ impl Typechecker {
                     ty =>
                         Err(TypeError::UnGenningNonStream { range: r.clone(), expr: e, actual_type: ty }),
                 }
+            &Expr::Unbox(ref r, e) =>
+                match self.synthesize(ctx, e)? {
+                    Type::Box(ty) =>
+                        Ok(*ty),
+                    ty =>
+                        Err(TypeError::UnboxingNonBox { range: r.clone(), expr: e, actual_type: ty }),
+                },
             _ =>
                 Err(TypeError::synthesis_unsupported(expr)),
         }
