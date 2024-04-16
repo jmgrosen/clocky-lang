@@ -8,7 +8,7 @@ use num::{One, rational::Ratio};
 use string_interner::DefaultStringInterner;
 use indenter::{Format, indented, Indented};
 
-use crate::expr::{Symbol, Expr, Value, PrettyExpr};
+use crate::expr::{Symbol, Expr, Value};
 
 // eventually this will get more complicated...
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -320,6 +320,39 @@ impl Ctx {
                 panic!("don't know what to do when trying to do tick-stripping in a pretend context!")
         }
     }
+
+    fn pretty<'a>(&'a self, interner: &'a DefaultStringInterner) -> PrettyCtx<'a> {
+        PrettyCtx { interner, ctx: self }
+    }
+}
+
+pub struct PrettyCtx<'a> {
+    interner: &'a DefaultStringInterner,
+    ctx: &'a Ctx,
+}
+
+impl<'a> PrettyCtx<'a> {
+    fn for_ctx(&self, ctx: &'a Ctx) -> PrettyCtx<'a> {
+        PrettyCtx { ctx, ..*self }
+    }
+}
+
+impl<'a> fmt::Display for PrettyCtx<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self.ctx {
+            Ctx::Empty =>
+                write!(f, "-"),
+            Ctx::Var(x, ref ty, ref next) =>
+                write!(f, "{}, {}: {}",
+                       self.for_ctx(next), self.interner.resolve(x).unwrap(),
+                       PrettyType { interner: self.interner, ty }),
+            Ctx::Tick(ref clock, ref next) =>
+                write!(f, "{}, $^({})", self.for_ctx(next),
+                       PrettyClock { interner: self.interner, clock }),
+            Ctx::Pretend(ref next) =>
+                write!(f, "{}, XX", self.for_ctx(next)),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -443,6 +476,10 @@ impl<'a, R> PrettyTypeError<'a, R> {
     fn for_clock(&self, clock: &'a Clock) -> PrettyClock<'a> {
         PrettyClock { interner: self.interner, clock }
     }
+
+    fn for_ctx(&self, ctx: &'a Ctx) -> PrettyCtx<'a> {
+        ctx.pretty(self.interner)
+    }
 }
 
 impl<'a> PrettyTypeError<'a, tree_sitter::Range> {
@@ -484,11 +521,11 @@ impl<'a> PrettyTypeError<'a, tree_sitter::Range> {
                 write!(f, "found use of variable \"{}\", but it has timing {} and non-stable type \"{}\"",
                        self.interner.resolve(var).unwrap(), self.for_timing(timing), self.for_type(var_type)),
             TypeError::ForcingWithNotEnoughTick { expr, ref synthesized_clock, ref ctx, .. } =>
-                write!(f, "trying to force expression \"{}\", but there is not enough tick for clock \"{}\" in the context {:?}",
-                       self.for_expr(expr), self.for_clock(synthesized_clock), ctx),
+                write!(f, "trying to force expression \"{}\", but there is not enough tick for clock \"{}\" in the context \"{}\"",
+                       self.for_expr(expr), self.for_clock(synthesized_clock), self.for_ctx(ctx)),
             TypeError::ForcingDoesntHoldUp { expr, ref stripped_ctx, .. } =>
-                write!(f, "trying to force expression \"{}\", when the context has been stripped to \"{:?}\", it no longer typechecks!",
-                       self.for_expr(expr), stripped_ctx),
+                write!(f, "trying to force expression \"{}\", when the context has been stripped to \"{}\", it no longer typechecks!",
+                       self.for_expr(expr), self.for_ctx(stripped_ctx)),
             TypeError::UnboxingNonBox { expr, ref actual_type, .. } =>
                 write!(f, "trying to unbox expression \"{}\", but found it has type \"{}\", which is not a box",
                        self.for_expr(expr), self.for_type(actual_type)),
