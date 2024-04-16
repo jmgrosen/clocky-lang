@@ -1,6 +1,7 @@
 use core::fmt;
 use std::error::Error;
 use std::path::Path;
+use std::process::ExitCode;
 use std::{collections::HashMap, path::PathBuf, fs::File};
 use std::io::Read;
 
@@ -40,7 +41,7 @@ enum Command {
         dump_to: Option<PathBuf>,
     },
     /// Type-check the given program.
-    TypeCheck {
+    Typecheck {
         /// Code file to use
         file: Option<PathBuf>,
     },
@@ -266,7 +267,7 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>, length
     Ok(())
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), ExitCode> {
     let args = Args::parse();
     let annot_arena = Arena::new();
     let mut interner = StringInterner::new();
@@ -290,7 +291,7 @@ fn main() -> std::io::Result<()> {
 
     let res = match args.cmd {
         Command::Parse { file, dump_to } => cmd_parse(&mut toplevel, file, dump_to),
-        Command::TypeCheck { file } => cmd_typecheck(&mut toplevel, file),
+        Command::Typecheck { file } => cmd_typecheck(&mut toplevel, file),
         Command::Interpret { file } => cmd_interpret(&mut toplevel, file),
         Command::Repl => cmd_repl(&mut toplevel),
         Command::Sample { out, file, length } => cmd_sample(&mut toplevel, file, length, out),
@@ -300,8 +301,9 @@ fn main() -> std::io::Result<()> {
         Ok(()) => { },
         Err(TopLevelError::TypeError(code, e)) => {
             println!("{}", e.pretty(toplevel.parser.interner, &code));
+            return Err(1.into());
         },
-        Err(err) => { println!("{:?}", err); },
+        Err(err) => { println!("{:?}", err); return Err(2.into()); },
     }
 
     Ok(())

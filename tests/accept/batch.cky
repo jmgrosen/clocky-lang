@@ -1,0 +1,13 @@
+let batch2helper: (~^(2k) sample -> |>^(2k) ~^(k) [sample; 2]) *
+                  (sample -> ~^(2k) sample -> ~^(k) [sample; 2]) =
+  (&^(2k) bh.
+      ((\s0.
+          let (x0, s1) = *s0 in
+          `((let (b, h) = !(unbox bh) in h) x0 !s1)),
+       (\x0. \s1.
+          let (x1, s2) = *s1 in
+          [x0, x1] :: (`((let (b, h) = !(unbox bh) in b) !s2))
+                       : |>^(2k) |>^(2k) ~^(k) [sample; 2]))) in
+let batch2: ~^(2k) sample -> |>^(2k) ~^(k) [sample; 2] =
+  let (b, h) = batch2helper in b in
+()

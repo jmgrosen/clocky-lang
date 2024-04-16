@@ -1,0 +1,8 @@
+let sinsig =
+  ((&^(k) sinsig. \sigin.
+    let (x, siginp) = *sigin in
+    sin x :: `(!(unbox sinsig) !siginp))
+  : ~^(k) sample -> ~^(k) sample) in
+let persamp = (div (mul 440.0 (mul 2.0 pi)) 48000.0) in
+let lin = ((&^(k) s. \x. x :: `(!(unbox s) (add x persamp))) : sample -> ~^(k) sample) 0.0 in
+sinsig lin
