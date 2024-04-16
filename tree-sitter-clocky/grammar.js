@@ -1,5 +1,5 @@
 module.exports = grammar({
-    name: 'lambdalisten',
+    name: 'clocky',
 
     rules: {
         source_file: $ => $.expression,

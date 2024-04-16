@@ -130,6 +130,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98cc8fbded0c607b7ba9dd60cd98df59af97e84d24e49c8557331cfc26d301ce"
 
 [[package]]
+name = "clocky-lang"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "clap",
+ "hound",
+ "indenter",
+ "num",
+ "string-interner",
+ "tree-sitter",
+ "tree-sitter-clocky",
+ "typed-arena",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -161,21 +176,6 @@ name = "indenter"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce23b50ad8242c51a442f3ff322d56b02f08852c77e4c0b4d3fd684abc89c683"
-
-[[package]]
-name = "lambda-listen"
-version = "0.1.0"
-dependencies = [
- "cc",
- "clap",
- "hound",
- "indenter",
- "num",
- "string-interner",
- "tree-sitter",
- "tree-sitter-lambdalisten",
- "typed-arena",
-]
 
 [[package]]
 name = "memchr"
@@ -370,7 +370,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-lambdalisten"
+name = "tree-sitter-clocky"
 version = "0.0.1"
 dependencies = [
  "cc",

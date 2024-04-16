@@ -1,7 +1,7 @@
 {
-  "name": "tree-sitter-lamlis",
+  "name": "tree-sitter-clocky",
   "version": "0.1.0",
-  "description": "tree sitter grammar for lambda listen",
+  "description": "tree sitter grammar for clocky",
   "main": "bindings/node",
   "types": "bindings/node",
   "scripts": {
@@ -37,11 +37,11 @@
   ],
   "tree-sitter": [
     {
-      "scope": "source.lamlis",
+      "scope": "source.clocky",
       "file-types": [
-        "ll"
+        "cky"
       ],
-      "injection-regex": "lamlis",
+      "injection-regex": "clocky",
       "highlights": "queries/highlights.scm"
     }
   ]

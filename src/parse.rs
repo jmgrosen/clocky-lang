@@ -80,9 +80,9 @@ pub struct Parser<'a, 'b> {
 impl<'a, 'b> Parser<'a, 'b> {
     pub fn new(interner: &'a mut DefaultStringInterner, arena: &'b Arena<Expr<'b, tree_sitter::Range>>) -> Parser<'a, 'b> {
         let mut parser = tree_sitter::Parser::new();
-        let lang = tree_sitter_lambdalisten::language();
+        let lang = tree_sitter_clocky::language();
         let node_matcher = ConcreteNodeMatcher::new(&lang);
-        parser.set_language(lang).expect("Error loading lambda listen grammar");
+        parser.set_language(lang).expect("Error loading clocky grammar");
 
         Parser {
             parser,
