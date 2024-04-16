@@ -245,11 +245,13 @@ pub type Globals = HashMap<Symbol, Type>;
 // removed due to tick-stripping, so that type errors can make more
 // sense. but can't immediately figure out a nice way of doing that,
 // so using this representation in the meantime.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Ctx {
     Empty,
     Tick(Clock, Rc<Ctx>),
     Var(Symbol, Type, Rc<Ctx>),
+    // variables behind this have "free" timing -- used as part of type synthesis
+    Pretend(Rc<Ctx>),
 }
 
 impl Ctx {
@@ -267,6 +269,8 @@ impl Ctx {
                 } else {
                     next.lookup(x)
                 },
+            Ctx::Pretend(ref next) =>
+                next.lookup(x).map(|(_, ty)| (Vec::new(), ty)),
         }
     }
 
@@ -285,14 +289,35 @@ impl Ctx {
                 } else {
                     next.box_strengthen()
                 },
+            Ctx::Pretend(ref next) =>
+                Ctx::Pretend(Rc::new(next.box_strengthen())),
         }
     }
 
-    fn strip_tick(&self) -> Option<(Clock, Ctx)> {
+    fn strip_tick(&self, to_strip: Clock) -> Option<Ctx> {
         match *self {
             Ctx::Empty => None,
-            Ctx::Tick(clock, ref next) => Some((clock, (**next).clone())),
-            Ctx::Var(_, _, ref next) => next.strip_tick(),
+            Ctx::Tick(tick_amount, ref next) =>
+                // TODO: is this sound????????
+                match to_strip.partial_cmp(&tick_amount) {
+                    Some(Ordering::Less) => {
+                        let remaining_to_strip = to_strip.uncompose(&tick_amount).unwrap();
+                        next.strip_tick(remaining_to_strip)
+                    },
+                    Some(Ordering::Equal) =>
+                        Some((**next).clone()),
+                    Some(Ordering::Greater) => {
+                        let remaining_on_ctx = tick_amount.uncompose(&to_strip).unwrap();
+                        Some(Ctx::Tick(remaining_on_ctx, next.clone()))
+                    },
+                    None =>
+                        None
+                },
+            Ctx::Var(_, _, ref next) =>
+                next.strip_tick(to_strip),
+            Ctx::Pretend(ref _next) =>
+                // uhhhhhhhhhh
+                panic!("don't know what to do when trying to do tick-stripping in a pretend context!")
         }
     }
 }
@@ -314,8 +339,8 @@ pub enum TypeError<'a, R> {
     MismatchingArraySize { range: R, expected_size: ArraySize, found_size: usize },
     UnGenningNonStream { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
     VariableTimingBad { range: R, var: Symbol, timing: Vec<Clock>, var_type: Type },
-    ForcingWithNoTick { range: R, expr: &'a Expr<'a, R> },
-    ForcingMismatchingClock { range: R, expr: &'a Expr<'a, R>, stripped_clock: Clock, synthesized_clock: Clock, remaining_type: Type },
+    ForcingWithNotEnoughTick { range: R, expr: &'a Expr<'a, R>, ctx: Ctx, synthesized_clock: Clock },
+    ForcingDoesntHoldUp { range: R, expr: &'a Expr<'a, R>, synthesized_clock: Clock, stripped_ctx: Ctx, err: Box<TypeError<'a, R>> },
     UnboxingNonBox { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
     CouldntCheck { expr: &'a Expr<'a, R>, expected_type: Type, synthesis_error: Option<Box<TypeError<'a, R>>> },
 }
@@ -376,7 +401,8 @@ impl<'a, R> TypeError<'a, R> {
             BadAnnotation { ref err, .. } |
             LetSynthFailure { ref err, .. } |
             LetCheckFailure { ref err, .. } |
-            CouldntCheck { synthesis_error: Some(ref err), .. } =>
+            CouldntCheck { synthesis_error: Some(ref err), .. } |
+            ForcingDoesntHoldUp { ref err, .. } =>
                 Some(err),
             _ =>
                 None,
@@ -457,11 +483,12 @@ impl<'a> PrettyTypeError<'a, tree_sitter::Range> {
             TypeError::VariableTimingBad { var, ref timing, ref var_type, .. } =>
                 write!(f, "found use of variable \"{}\", but it has timing {} and non-stable type \"{}\"",
                        self.interner.resolve(var).unwrap(), self.for_timing(timing), self.for_type(var_type)),
-            TypeError::ForcingWithNoTick { expr, .. } =>
-                write!(f, "trying to force expression \"{}\", but there is no tick in the context!", self.for_expr(expr)),
-            TypeError::ForcingMismatchingClock { expr, stripped_clock, synthesized_clock, ref remaining_type, .. } =>
-                write!(f, "trying to force expression \"{}\" of type \"{}\", but the most recent tick in the context has clock \"{}\"",
-                       self.for_expr(expr), self.for_type(&Type::Later(synthesized_clock, Box::new(remaining_type.clone()))), self.for_clock(&stripped_clock)),
+            TypeError::ForcingWithNotEnoughTick { expr, ref synthesized_clock, ref ctx, .. } =>
+                write!(f, "trying to force expression \"{}\", but there is not enough tick for clock \"{}\" in the context {:?}",
+                       self.for_expr(expr), self.for_clock(synthesized_clock), ctx),
+            TypeError::ForcingDoesntHoldUp { expr, ref stripped_ctx, .. } =>
+                write!(f, "trying to force expression \"{}\", when the context has been stripped to \"{:?}\", it no longer typechecks!",
+                       self.for_expr(expr), stripped_ctx),
             TypeError::UnboxingNonBox { expr, ref actual_type, .. } =>
                 write!(f, "trying to unbox expression \"{}\", but found it has type \"{}\", which is not a box",
                        self.for_expr(expr), self.for_type(actual_type)),
@@ -671,24 +698,39 @@ impl Typechecker {
                         Err(TypeError::non_function_application(r.clone(), e1, ty)),
                 },
             &Expr::Force(ref r, e1) => {
-                // TODO: something fancier here?
-                let Some((stripped_clock, stripped_ctx)) = ctx.strip_tick() else {
-                    return Err(TypeError::ForcingWithNoTick { range: r.clone(), expr: e1 });
+                // first we synthesize the type under the assumption
+                // that we can use any variable freely, then we strip
+                // the context according to what the type says we
+                // must, and finally re-check/synthesize the type
+                // under the stripped context. hacky but may work...
+                //
+                // TODO: need to be careful about variable shadowing
+                // here... will probably need to move to a better
+                // context representation
+                let pretend = Ctx::Pretend(Rc::new(ctx.clone()));
+                let (synthesized_clock, synthesized_type) = match self.synthesize(&pretend, e1)? {
+                    Type::Later(clock, ty) => (clock, ty),
+                    ty => return Err(TypeError::forcing_non_thunk(r.clone(), e1, ty)),
                 };
-                match self.synthesize(&stripped_ctx, e1)? {
-                    Type::Later(synthesized_clock, ty) =>
-                        if stripped_clock == synthesized_clock {
-                            Ok(*ty)
-                        } else {
-                            Err(TypeError::ForcingMismatchingClock {
-                                range: r.clone(),
-                                expr: e1,
-                                stripped_clock,
-                                synthesized_clock,
-                                remaining_type: *ty,
-                            })
-                        },
-                    ty => Err(TypeError::forcing_non_thunk(r.clone(), e1, ty)),
+                let Some(stripped_ctx) = ctx.strip_tick(synthesized_clock) else {
+                    return Err(TypeError::ForcingWithNotEnoughTick {
+                        range: r.clone(),
+                        expr: e1,
+                        ctx: ctx.clone(),
+                        synthesized_clock,
+                    });
+                };
+                match self.check(&stripped_ctx, e1, &Type::Later(synthesized_clock, synthesized_type.clone())) {
+                    Ok(()) =>
+                        Ok(*synthesized_type),
+                    Err(err) =>
+                        Err(TypeError::ForcingDoesntHoldUp {
+                            range: r.clone(),
+                            expr: e1,
+                            synthesized_clock,
+                            stripped_ctx,
+                            err: Box::new(err),
+                        }),
                 }
             },
             &Expr::LetIn(ref r, x, None, e1, e2) =>
