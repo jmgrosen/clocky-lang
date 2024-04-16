@@ -82,6 +82,30 @@ impl<'a, R> Expr<'a, R> {
     pub fn pretty<'b>(&'b self, interner: &'b DefaultStringInterner) -> PrettyExpr<'b, 'a, R> {
         PrettyExpr { interner, expr: self }
     }
+
+    pub fn range(&self) -> &R {
+        match *self {
+            Expr::Var(ref r, _) => r,
+            Expr::Val(ref r, _) => r,
+            Expr::Annotate(ref r, _, _) => r,
+            Expr::Lam(ref r, _, _) => r,
+            Expr::App(ref r, _, _) => r,
+            Expr::Force(ref r, _) => r,
+            Expr::Lob(ref r, _, _, _) => r,
+            Expr::Gen(ref r, _, _) => r,
+            Expr::LetIn(ref r, _, _, _, _) => r,
+            Expr::Pair(ref r, _, _) => r,
+            Expr::UnPair(ref r, _, _, _, _) => r,
+            Expr::InL(ref r, _) => r,
+            Expr::InR(ref r, _) => r,
+            Expr::Case(ref r, _, _, _, _, _) => r,
+            Expr::Array(ref r, _) => r,
+            Expr::UnGen(ref r, _) => r,
+            Expr::Delay(ref r, _) => r,
+            Expr::Box(ref r, _) => r,
+            Expr::Unbox(ref r, _) => r,
+        }
+    }
 }
 
 pub struct PrettyExpr<'a, 'b, R> {

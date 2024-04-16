@@ -157,12 +157,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
 
 [[package]]
+name = "indenter"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce23b50ad8242c51a442f3ff322d56b02f08852c77e4c0b4d3fd684abc89c683"
+
+[[package]]
 name = "lambda-listen"
 version = "0.1.0"
 dependencies = [
  "cc",
  "clap",
  "hound",
+ "indenter",
  "num",
  "string-interner",
  "tree-sitter",

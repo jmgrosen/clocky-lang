@@ -2,9 +2,11 @@ use core::fmt;
 use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::rc::Rc;
+use std::fmt::Write;
 
 use num::{One, rational::Ratio};
 use string_interner::DefaultStringInterner;
+use indenter::{Format, indented, Indented};
 
 use crate::expr::{Symbol, Expr, Value, PrettyExpr};
 
@@ -209,7 +211,7 @@ impl<'a> PrettyType<'a> {
                 }),
             Type::Later(ref clock, ref ty) =>
                 parenthesize(f, prec > 3, |f| {
-                    write!(f, "|>^({})", self.for_clock(clock))?;
+                    write!(f, "|>^({}) ", self.for_clock(clock))?;
                     self.for_type(ty).fmt_prec(f, 3)
                 }),
             Type::Array(ref ty, ref size) => {
@@ -219,7 +221,7 @@ impl<'a> PrettyType<'a> {
             },
             Type::Box(ref ty) =>
                 parenthesize(f, prec > 3, |f| {
-                    write!(f, "[]")?;
+                    write!(f, "[] ")?;
                     self.for_type(ty).fmt_prec(f, 3)
                 }),
         }
@@ -315,6 +317,7 @@ pub enum TypeError<'a, R> {
     ForcingWithNoTick { range: R, expr: &'a Expr<'a, R> },
     ForcingMismatchingClock { range: R, expr: &'a Expr<'a, R>, stripped_clock: Clock, synthesized_clock: Clock, remaining_type: Type },
     UnboxingNonBox { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
+    CouldntCheck { expr: &'a Expr<'a, R>, expected_type: Type, synthesis_error: Option<Box<TypeError<'a, R>>> },
 }
 
 impl<'a, R> TypeError<'a, R> {
@@ -365,6 +368,20 @@ impl<'a, R> TypeError<'a, R> {
     pub fn pretty(&'a self, interner: &'a DefaultStringInterner, program_text: &'a str) -> PrettyTypeError<'a, R> {
         PrettyTypeError { interner, program_text, error: self }
     }
+
+    fn source_type_error(&self) -> Option<&TypeError<'a, R>> {
+        use TypeError::*;
+        match *self {
+            BadArgument { arg_err: ref err, .. } |
+            BadAnnotation { ref err, .. } |
+            LetSynthFailure { ref err, .. } |
+            LetCheckFailure { ref err, .. } |
+            CouldntCheck { synthesis_error: Some(ref err), .. } =>
+                Some(err),
+            _ =>
+                None,
+        }
+    }
 }
 
 pub struct PrettyTypeError<'a, R> {
@@ -378,8 +395,15 @@ impl<'a, R> PrettyTypeError<'a, R> {
         PrettyTypeError { interner: self.interner, program_text: self.program_text, error }
     }
 
+    /*
     fn for_expr(&self, expr: &'a Expr<'a, R>) -> PrettyExpr<'a, 'a, R> {
         expr.pretty(self.interner)
+    }
+    */
+
+    fn for_expr(&self, expr: &'a Expr<'a, tree_sitter::Range>) -> &'a str {
+        let range = expr.range();
+        &self.program_text[range.start_byte .. range.end_byte]
     }
 
     fn for_type(&self, ty: &'a Type) -> PrettyType<'a> {
@@ -395,53 +419,80 @@ impl<'a, R> PrettyTypeError<'a, R> {
     }
 }
 
-impl<'a, R> fmt::Display for PrettyTypeError<'a, R> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl<'a> PrettyTypeError<'a, tree_sitter::Range> {
+    fn format_one(&self, f: &mut Indented<'_, fmt::Formatter<'_>>) -> fmt::Result {
         match *self.error {
             TypeError::MismatchingTypes { expr, ref synth, ref expected } =>
-                write!(f, "found {} to have type {} but expected {}", self.for_expr(expr), self.for_type(synth), self.for_type(expected)),
+                write!(f, "found \"{}\" to have type \"{}\" but expected \"{}\"", self.for_expr(expr), self.for_type(synth), self.for_type(expected)),
             TypeError::VariableNotFound { var, .. } =>
                 write!(f, "variable \"{}\" not found", self.interner.resolve(var).unwrap()),
-            TypeError::BadArgument { ref arg_type, fun, arg, ref arg_err, .. } =>
-                write!(f, "found {} to take argument type {}, but argument {} does not have that type: {}",
-                       self.for_expr(fun), self.for_type(arg_type), self.for_expr(arg), self.for_error(arg_err)),
+            TypeError::BadArgument { ref arg_type, fun, arg, .. } =>
+                write!(f, "found \"{}\" to take argument type \"{}\", but argument \"{}\" does not have that type",
+                       self.for_expr(fun), self.for_type(arg_type), self.for_expr(arg)),
             TypeError::NonFunctionApplication { purported_fun, ref actual_type, .. } =>
-                write!(f, "trying to call {}, but found it to have type {}, which is not a function type",
+                write!(f, "trying to call \"{}\", but found it to have type \"{}\", which is not a function type",
                        self.for_expr(purported_fun), self.for_type(actual_type)),
             TypeError::SynthesisUnsupported { expr } =>
-                write!(f, "don't know how to implement synthesis for {} yet", self.for_expr(expr)),
-            TypeError::BadAnnotation { expr, ref purported_type, ref err, .. } =>
-                write!(f, "bad annotation of expression {} as type {}: {}", self.for_expr(expr), self.for_type(purported_type), self.for_error(err)),
-            TypeError::LetCheckFailure { var, expr, ref expected_type, ref err, .. } =>
-                write!(f, "couldn't check variable {} to have type {} from definition {}: {}",
-                       self.interner.resolve(var).unwrap(), self.for_type(expected_type), self.for_expr(expr), self.for_error(err)),
-            TypeError::LetSynthFailure { var, expr, ref err, .. } =>
-                write!(f, "couldn't infer the type of variable {} from definition {}: {}",
-                       self.interner.resolve(var).unwrap(), self.for_expr(expr), self.for_error(err)),
+                write!(f, "don't know how to implement synthesis for \"{}\" yet", self.for_expr(expr)),
+            TypeError::BadAnnotation { expr, ref purported_type, .. } =>
+                write!(f, "bad annotation of expression \"{}\" as type \"{}\"", self.for_expr(expr), self.for_type(purported_type)),
+            TypeError::LetCheckFailure { var, expr, ref expected_type, .. } =>
+                write!(f, "couldn't check variable \"{}\" to have type \"{}\" from definition \"{}\"",
+                       self.interner.resolve(var).unwrap(), self.for_type(expected_type), self.for_expr(expr)),
+            TypeError::LetSynthFailure { var, expr, .. } =>
+                write!(f, "couldn't infer the type of variable \"{}\" from definition \"{}\"",
+                       self.interner.resolve(var).unwrap(), self.for_expr(expr)),
             TypeError::ForcingNonThunk { expr, ref actual_type, .. } =>
-                write!(f, "tried to force expression {} of type {}, which is not a thunk", self.for_expr(expr), self.for_type(actual_type)),
+                write!(f, "tried to force expression \"{}\" of type \"{}\", which is not a thunk", self.for_expr(expr), self.for_type(actual_type)),
             TypeError::UnPairingNonProduct { expr, ref actual_type, .. } =>
-                write!(f, "tried to unpair expression {} of type {}, which is not a product", self.for_expr(expr), self.for_type(actual_type)),
+                write!(f, "tried to unpair expression \"{}\" of type \"{}\", which is not a product", self.for_expr(expr), self.for_type(actual_type)),
             TypeError::CasingNonSum { expr, ref actual_type, .. } =>
-                write!(f, "tried to case on expression {} of type {}, which is not a sum", self.for_expr(expr), self.for_type(actual_type)),
+                write!(f, "tried to case on expression \"{}\" of type \"{}\", which is not a sum", self.for_expr(expr), self.for_type(actual_type)),
             TypeError::CouldNotUnify { ref type1, ref type2 } =>
-                write!(f, "could not unify types {} and {}", self.for_type(type1), self.for_type(type2)),
+                write!(f, "could not unify types \"{}\" and \"{}\"", self.for_type(type1), self.for_type(type2)),
             TypeError::MismatchingArraySize { ref expected_size, found_size, .. } =>
                 write!(f, "expected array of size {} but found size {}", expected_size, found_size),
             TypeError::UnGenningNonStream { expr, ref actual_type, .. } =>
-                write!(f, "expected stream to ungen, but found {} of type {}", self.for_expr(expr), self.for_type(actual_type)),
+                write!(f, "expected stream to ungen, but found \"{}\" of type \"{}\"", self.for_expr(expr), self.for_type(actual_type)),
             TypeError::VariableTimingBad { var, ref timing, ref var_type, .. } =>
-                write!(f, "found use of variable {}, but it has timing {} and non-stable type {}",
+                write!(f, "found use of variable \"{}\", but it has timing {} and non-stable type \"{}\"",
                        self.interner.resolve(var).unwrap(), self.for_timing(timing), self.for_type(var_type)),
             TypeError::ForcingWithNoTick { expr, .. } =>
-                write!(f, "trying to force expression {}, but there is no tick in the context!", self.for_expr(expr)),
+                write!(f, "trying to force expression \"{}\", but there is no tick in the context!", self.for_expr(expr)),
             TypeError::ForcingMismatchingClock { expr, stripped_clock, synthesized_clock, ref remaining_type, .. } =>
-                write!(f, "trying to force expression {} of type {}, but the most recent tick in the context has clock {}",
+                write!(f, "trying to force expression \"{}\" of type \"{}\", but the most recent tick in the context has clock \"{}\"",
                        self.for_expr(expr), self.for_type(&Type::Later(synthesized_clock, Box::new(remaining_type.clone()))), self.for_clock(&stripped_clock)),
             TypeError::UnboxingNonBox { expr, ref actual_type, .. } =>
-                write!(f, "trying to unbox expression {}, but found it has type {}, which is not a box",
+                write!(f, "trying to unbox expression \"{}\", but found it has type \"{}\", which is not a box",
                        self.for_expr(expr), self.for_type(actual_type)),
+            TypeError::CouldntCheck { expr, ref expected_type, synthesis_error: Some(_) } =>
+                write!(f, "expected \"{}\" to have type \"{}\", but couldn't check that and errored trying to synthesize a type",
+                       self.for_expr(expr), self.for_type(expected_type)),
+            TypeError::CouldntCheck { expr, ref expected_type, synthesis_error: None } =>
+                write!(f, "expected \"{}\" to have type \"{}\", but couldn't check that!",
+                       self.for_expr(expr), self.for_type(expected_type)),
         }
+    }
+}
+
+impl<'a> fmt::Display for PrettyTypeError<'a, tree_sitter::Range> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut error = Some(self.error);
+        let mut indent: usize = 0;
+
+        while let Some(err) = error {
+            let mut inserter = move |_: usize, f: &mut dyn Write|
+              (0..indent).map(|_| write!(f, "  ")).collect();
+            self.for_error(err).format_one(&mut indented(f).with_format(Format::Custom {
+                inserter: &mut inserter
+            }))?;
+            writeln!(f)?;
+
+            error = err.source_type_error();
+            indent += 1;
+        }
+
+        Ok(())
     }
 }
 
@@ -533,7 +584,11 @@ impl Typechecker {
                 },
             (&Type::Array(ref ty, ref size), &Expr::Array(ref r, ref es)) =>
                 if size.as_const() != Some(es.len()) {
-                    Err(TypeError::MismatchingArraySize { range: r.clone(), expected_size: size.clone(), found_size: es.len() })
+                    Err(TypeError::MismatchingArraySize {
+                        range: r.clone(),
+                        expected_size: size.clone(),
+                        found_size: es.len()
+                    })
                 } else {
                     for e in es.iter() {
                         self.check(ctx, e, ty)?;
@@ -547,7 +602,23 @@ impl Typechecker {
             (&Type::Box(ref ty), &Expr::Box(_, e)) =>
                 self.check(&ctx.box_strengthen(), e, ty),
             (_, _) => {
-                let synthesized = self.synthesize(ctx, expr)?;
+                let synthesized = match self.synthesize(ctx, expr) {
+                    Ok(ty) =>
+                        ty,
+                    Err(TypeError::SynthesisUnsupported { .. }) =>
+                        return Err(TypeError::CouldntCheck {
+                            expr,
+                            expected_type: ty.clone(),
+                            synthesis_error: None,
+                        }),
+                    Err(err) =>
+                        return Err(TypeError::CouldntCheck {
+                            expr,
+                            expected_type: ty.clone(),
+                            synthesis_error: Some(Box::new(err)),
+                        }),
+                };
+
                 if subtype(ctx, &synthesized, ty) {
                     Ok(())
                 } else {
