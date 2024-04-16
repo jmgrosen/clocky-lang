@@ -31,7 +31,7 @@ module.exports = grammar({
 
         wrap_expression: $ => seq('(', $.expression, ')'),    
 
-        identifier: $ => /[a-z]+/,
+        identifier: $ => /[a-z][a-z0-9_]*/,
 
         literal: $ => /\d+/,
 
