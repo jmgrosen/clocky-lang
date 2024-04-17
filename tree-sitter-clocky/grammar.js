@@ -48,13 +48,13 @@ module.exports = grammar({
 
         gen_expression: $ => prec.right(seq($.expression, '::', $.expression)),
 
-        let_expression: $ => prec.left(-1, seq('let', $.identifier, optional(seq(':', $.type)), '=', $.expression, 'in', $.expression)),
+        let_expression: $ => prec.left(-1, seq('let', $.identifier, optional(seq(':', $.type)), '=', field('bound', $.expression), 'in', field('body', $.expression))),
 
         annotate_expression: $ => seq($.expression, ':', $.type),
 
         pair_expression: $ => seq('(', $.expression, ',', $.expression, ')'),
 
-        unpair_expression: $ => prec.left(-1, seq('let', '(', $.identifier, ',', $.identifier, ')', '=', $.expression, 'in', $.expression)),
+        unpair_expression: $ => prec.left(-1, seq('let', '(', $.identifier, ',', $.identifier, ')', '=', field('bound', $.expression), 'in', field('body', $.expression))),
 
         inl_expression: $ => prec(2, seq('inl', $.expression)),
 
@@ -115,6 +115,7 @@ module.exports = grammar({
 
         size: $ => /[\d]+/,
 
+        // TODO: put the parentheses in here, and make it so that bare identifiers don't need them
         clock: $ => choice($.identifier, seq($.clock_coeff, $.identifier)),
 
         clock_coeff: $ => choice(/[\d]+/, seq(/[\d]+/, "/", /[\d]+/)),

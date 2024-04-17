@@ -292,16 +292,24 @@
             "value": "="
           },
           {
-            "type": "SYMBOL",
-            "name": "expression"
+            "type": "FIELD",
+            "name": "bound",
+            "content": {
+              "type": "SYMBOL",
+              "name": "expression"
+            }
           },
           {
             "type": "STRING",
             "value": "in"
           },
           {
-            "type": "SYMBOL",
-            "name": "expression"
+            "type": "FIELD",
+            "name": "body",
+            "content": {
+              "type": "SYMBOL",
+              "name": "expression"
+            }
           }
         ]
       }
@@ -383,16 +391,24 @@
             "value": "="
           },
           {
-            "type": "SYMBOL",
-            "name": "expression"
+            "type": "FIELD",
+            "name": "bound",
+            "content": {
+              "type": "SYMBOL",
+              "name": "expression"
+            }
           },
           {
             "type": "STRING",
             "value": "in"
           },
           {
-            "type": "SYMBOL",
-            "name": "expression"
+            "type": "FIELD",
+            "name": "body",
+            "content": {
+              "type": "SYMBOL",
+              "name": "expression"
+            }
           }
         ]
       }
