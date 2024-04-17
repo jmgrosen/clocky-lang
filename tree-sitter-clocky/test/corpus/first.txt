@@ -1,0 +1,20 @@
+=======================================
+Applications, Identifiers, and Literals
+=======================================
+
+1337 4321 asdf
+
+---
+
+
+(source_file
+  (expression
+    (application
+      (expression
+        (application
+          (expression
+            (literal))
+          (expression
+            (literal))))
+      (expression
+        (identifier)))))
