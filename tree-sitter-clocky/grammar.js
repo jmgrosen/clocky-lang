@@ -26,7 +26,8 @@ module.exports = grammar({
             $.unit_expression,
             $.delay_expression,
             $.box_expression,
-            $.unbox_expression
+            $.unbox_expression,
+            $.clockapp_expression
         ),
 
         wrap_expression: $ => seq('(', $.expression, ')'),    
@@ -75,6 +76,8 @@ module.exports = grammar({
 
         unbox_expression: $ => prec(2, seq('unbox', $.expression)),
 
+        clockapp_expression: $ => prec.left(seq($.expression, '@', '(', $.clock, ')')),
+
         type: $ => choice(
             $.wrap_type,
             $.base_type,
@@ -84,7 +87,8 @@ module.exports = grammar({
             $.sum_type,
             $.array_type,
             $.later_type,
-            $.box_type
+            $.box_type,
+            $.forall_type
         ),
 
         wrap_type: $ => seq('(', $.type, ')'),
@@ -113,6 +117,10 @@ module.exports = grammar({
 
         clock: $ => choice($.identifier, seq($.clock_coeff, $.identifier)),
 
-        clock_coeff: $ => choice(/[\d]+/, seq(/[\d]+/, "/", /[\d]+/))
+        clock_coeff: $ => choice(/[\d]+/, seq(/[\d]+/, "/", /[\d]+/)),
+
+        forall_type: $ => prec.right(seq('for', $.identifier, ':', $.kind, '.', $.type)),
+
+        kind: $ => choice('clock')
     }
 });

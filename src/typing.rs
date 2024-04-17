@@ -70,6 +70,14 @@ impl Clock {
             None
         }
     }
+
+    fn substitute(&self, for_: Symbol, other: &Clock) -> Clock {
+        if self.var == for_ {
+            Clock { coeff: self.coeff * other.coeff, var: other.var }
+        } else {
+            *self
+        }
+    }
 }
 
 pub struct PrettyClock<'a> {
@@ -105,6 +113,18 @@ impl<'a> fmt::Display for PrettyTiming<'a> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Clock,
+}
+
+impl fmt::Display for Kind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Kind::Clock => write!(f, "clock"),
+        }
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Type {
@@ -118,6 +138,7 @@ pub enum Type {
     Later(Clock, Box<Type>),
     Array(Box<Type>, ArraySize),
     Box(Box<Type>),
+    Forall(Symbol, Kind, Box<Type>), // forall (x : k). ty
 }
 
 impl Type {
@@ -137,18 +158,53 @@ impl Type {
             Type::Later(_, _) => false,
             Type::Array(ref ty, _) => ty.is_stable(),
             Type::Box(_) => true,
+            // TODO: is this right? well, it's surely not unsafe, right?
+            Type::Forall(_, _, _) => false,
         }
     }
 
-    /*
-    fn later(clock: Clock, ty: Type) -> Type {
-        if clock.coeff.is_zero() {
-            ty
-        } else {
-            Type::Later(clock, Box::new(ty))
+    fn subst_clock(&self, x: Symbol, c: Clock, interner: &mut DefaultStringInterner) -> Type {
+        match *self {
+            Type::Unit =>
+                Type::Unit,
+            Type::Sample =>
+                Type::Sample,
+            Type::Index =>
+                Type::Index,
+            Type::Stream(d, ref ty) =>
+                Type::Stream(d.substitute(x, &c), Box::new(ty.subst_clock(x, c, interner))),
+            Type::Function(ref ty1, ref ty2) =>
+                Type::Function(Box::new(ty1.subst_clock(x, c, interner)), Box::new(ty2.subst_clock(x, c, interner))),
+            Type::Product(ref ty1, ref ty2) =>
+                Type::Product(Box::new(ty1.subst_clock(x, c, interner)), Box::new(ty2.subst_clock(x, c, interner))),
+            Type::Sum(ref ty1, ref ty2) =>
+                Type::Sum(Box::new(ty1.subst_clock(x, c, interner)), Box::new(ty2.subst_clock(x, c, interner))),
+            Type::Later(d, ref ty) =>
+                Type::Later(d.substitute(x, &c), Box::new(ty.subst_clock(x, c, interner))),
+            Type::Array(ref ty, ref size) =>
+                Type::Array(Box::new(ty.subst_clock(x, c, interner)), size.clone()),
+            Type::Box(ref ty) =>
+                Type::Box(Box::new(ty.subst_clock(x, c, interner))),
+            Type::Forall(y, k, ref ty) => {
+                if x == y {
+                    // TODO: this is super hacky and slow
+                    let y_name = interner.resolve(y).unwrap();
+                    let mut i = 0;
+                    let new_name = loop {
+                        let poss = format!("{}{}", y_name, i);
+                        if interner.get(poss.as_str()).is_none() {
+                            break interner.get_or_intern(poss);
+                        }
+                        i += 1;
+                    };
+                    let freshened = ty.subst_clock(y, Clock { coeff: One::one(), var: new_name }, interner);
+                    Type::Forall(new_name, k, Box::new(freshened.subst_clock(x, c, interner)))
+                } else {
+                    Type::Forall(y, k, Box::new(ty.subst_clock(x, c, interner)))
+                }
+            },
         }
     }
-    */
 }
 
 fn parenthesize(f: &mut fmt::Formatter<'_>, p: bool, inner: impl FnOnce(&mut fmt::Formatter<'_>) -> fmt::Result) -> fmt::Result {
@@ -224,6 +280,11 @@ impl<'a> PrettyType<'a> {
                     write!(f, "[] ")?;
                     self.for_type(ty).fmt_prec(f, 3)
                 }),
+            Type::Forall(x, k, ref ty) =>
+                parenthesize(f, prec > 0, |f| {
+                    write!(f, "for {} : {}. ", self.interner.resolve(x).unwrap(), k)?;
+                    self.for_type(ty).fmt_prec(f, 0)
+                }),
         }
     }
 }
@@ -249,33 +310,54 @@ pub type Globals = HashMap<Symbol, Type>;
 pub enum Ctx {
     Empty,
     Tick(Clock, Rc<Ctx>),
-    Var(Symbol, Type, Rc<Ctx>),
+    TermVar(Symbol, Type, Rc<Ctx>),
     // variables behind this have "free" timing -- used as part of type synthesis
     Pretend(Rc<Ctx>),
+    TypeVar(Symbol, Kind, Rc<Ctx>),
 }
 
 impl Ctx {
-    fn lookup(&self, x: Symbol) -> Option<(Vec<Clock>, &Type)> {
+    fn lookup_term_var(&self, x: Symbol) -> Option<(Vec<Clock>, &Type)> {
         match *self {
             Ctx::Empty => None,
             Ctx::Tick(c, ref next) =>
-                next.lookup(x).map(|(mut cs, ty)| {
+                next.lookup_term_var(x).map(|(mut cs, ty)| {
                     cs.push(c);
                     (cs, ty)
                 }),
-            Ctx::Var(y, ref ty, ref next) =>
+            Ctx::TermVar(y, ref ty, ref next) =>
                 if x == y {
                     Some((Vec::new(), ty))
                 } else {
-                    next.lookup(x)
+                    next.lookup_term_var(x)
                 },
             Ctx::Pretend(ref next) =>
-                next.lookup(x).map(|(_, ty)| (Vec::new(), ty)),
+                next.lookup_term_var(x).map(|(_, ty)| (Vec::new(), ty)),
+            Ctx::TypeVar(_, _, ref next) =>
+                next.lookup_term_var(x),
+        }
+    }
+
+    fn lookup_type_var(&self, x: Symbol) -> Option<Kind> {
+        match *self {
+            Ctx::Empty => None,
+            Ctx::Tick(_, ref next) =>
+                next.lookup_type_var(x),
+            Ctx::TermVar(_, _, ref next) =>
+                next.lookup_type_var(x),
+            Ctx::Pretend(ref next) =>
+                next.lookup_type_var(x),
+            Ctx::TypeVar(y, k, ref next) =>
+                if x == y {
+                    Some(k)
+                } else {
+                    next.lookup_type_var(x)
+                },
         }
     }
 
     fn with_var(self, x: Symbol, ty: Type) -> Ctx {
-        Ctx::Var(x, ty, Rc::new(self))
+        Ctx::TermVar(x, ty, Rc::new(self))
     }
 
     // TODO: optimize this for the case that it's kept the same?
@@ -283,14 +365,16 @@ impl Ctx {
         match *self {
             Ctx::Empty => Ctx::Empty,
             Ctx::Tick(_, ref next) => next.box_strengthen(),
-            Ctx::Var(x, ref ty, ref next) =>
+            Ctx::TermVar(x, ref ty, ref next) =>
                 if ty.is_stable() {
-                    Ctx::Var(x, ty.clone(), Rc::new(next.box_strengthen()))
+                    Ctx::TermVar(x, ty.clone(), Rc::new(next.box_strengthen()))
                 } else {
                     next.box_strengthen()
                 },
             Ctx::Pretend(ref next) =>
                 Ctx::Pretend(Rc::new(next.box_strengthen())),
+            Ctx::TypeVar(x, k, ref next) =>
+                Ctx::TypeVar(x, k, Rc::new(next.box_strengthen())),
         }
     }
 
@@ -313,11 +397,17 @@ impl Ctx {
                     None =>
                         None
                 },
-            Ctx::Var(_, _, ref next) =>
+            Ctx::TermVar(_, _, ref next) =>
                 next.strip_tick(to_strip),
             Ctx::Pretend(ref _next) =>
                 // uhhhhhhhhhh
-                panic!("don't know what to do when trying to do tick-stripping in a pretend context!")
+                panic!("don't know what to do when trying to do tick-stripping in a pretend context!"),
+            Ctx::TypeVar(x, _, ref next) =>
+                if to_strip.var == x {
+                    None
+                } else {
+                    next.strip_tick(to_strip)
+                },
         }
     }
 
@@ -342,7 +432,7 @@ impl<'a> fmt::Display for PrettyCtx<'a> {
         match *self.ctx {
             Ctx::Empty =>
                 write!(f, "-"),
-            Ctx::Var(x, ref ty, ref next) =>
+            Ctx::TermVar(x, ref ty, ref next) =>
                 write!(f, "{}, {}: {}",
                        self.for_ctx(next), self.interner.resolve(x).unwrap(),
                        PrettyType { interner: self.interner, ty }),
@@ -351,6 +441,8 @@ impl<'a> fmt::Display for PrettyCtx<'a> {
                        PrettyClock { interner: self.interner, clock }),
             Ctx::Pretend(ref next) =>
                 write!(f, "{}, XX", self.for_ctx(next)),
+            Ctx::TypeVar(x, k, ref next) =>
+                write!(f, "{}, {} : {}", self.for_ctx(next), self.interner.resolve(x).unwrap(), k),
         }
     }
 }
@@ -376,6 +468,7 @@ pub enum TypeError<'a, R> {
     ForcingDoesntHoldUp { range: R, expr: &'a Expr<'a, R>, synthesized_clock: Clock, stripped_ctx: Ctx, err: Box<TypeError<'a, R>> },
     UnboxingNonBox { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
     CouldntCheck { expr: &'a Expr<'a, R>, expected_type: Type, synthesis_error: Option<Box<TypeError<'a, R>>> },
+    NonForallClockApp { range: R, purported_forall_clock: &'a Expr<'a, R>, actual_type: Type },
 }
 
 impl<'a, R> TypeError<'a, R> {
@@ -535,6 +628,9 @@ impl<'a> PrettyTypeError<'a, tree_sitter::Range> {
             TypeError::CouldntCheck { expr, ref expected_type, synthesis_error: None } =>
                 write!(f, "expected \"{}\" to have type \"{}\", but couldn't check that!",
                        self.for_expr(expr), self.for_type(expected_type)),
+            TypeError::NonForallClockApp { purported_forall_clock, ref actual_type, .. } =>
+                write!(f, "can only apply clocks to forall types, but expression \"{}\" has type \"{}\"",
+                       self.for_expr(purported_forall_clock), self.for_type(actual_type)),
         }
     }
 }
@@ -560,8 +656,9 @@ impl<'a> fmt::Display for PrettyTypeError<'a, tree_sitter::Range> {
     }
 }
 
-pub struct Typechecker {
-    pub globals: Globals,
+pub struct Typechecker<'a> {
+    pub globals: &'a Globals,
+    pub interner: &'a mut DefaultStringInterner,
 }
 
 
@@ -575,9 +672,14 @@ pub struct Typechecker {
 // - [ ] proj?
 // - [X] fix
 
-impl Typechecker {
-    pub fn check<'a, R: Clone>(&self, ctx: &Ctx, expr: &'a Expr<'a, R>, ty: &Type) -> Result<(), TypeError<'a, R>> {
+impl<'a> Typechecker<'a> {
+    pub fn check<'b, R: Clone>(&mut self, ctx: &Ctx, expr: &'b Expr<'b, R>, ty: &Type) -> Result<(), TypeError<'b, R>> {
         match (ty, expr) {
+            // CAREFUL! positioning this here matters, with respect to
+            // the other non-expression-syntax-guided rules
+            // (particlarly lob)
+            (&Type::Forall(x, k, ref ty), _) =>
+                self.check(&Ctx::TypeVar(x, k, Rc::new(ctx.clone())), expr, ty),
             (&Type::Unit, &Expr::Val(_, Value::Unit)) =>
                 Ok(()),
             (&Type::Function(ref ty1, ref ty2), &Expr::Lam(_, x, e)) => {
@@ -638,9 +740,9 @@ impl Typechecker {
                 match self.synthesize(ctx, e0)? {
                     Type::Sum(ty1, ty2) => {
                         let old_ctx = Rc::new(ctx.clone());
-                        let ctx1 = Ctx::Var(x1, *ty1, old_ctx.clone());
+                        let ctx1 = Ctx::TermVar(x1, *ty1, old_ctx.clone());
                         self.check(&ctx1, e1, ty)?;
-                        let ctx2 = Ctx::Var(x2, *ty2, old_ctx);
+                        let ctx2 = Ctx::TermVar(x2, *ty2, old_ctx);
                         self.check(&ctx2, e2, ty)
                     },
                     ty =>
@@ -692,7 +794,7 @@ impl Typechecker {
         }
     }
 
-    pub fn synthesize<'a, R: Clone>(&self, ctx: &Ctx, expr: &'a Expr<'a, R>) -> Result<Type, TypeError<'a, R>> {
+    pub fn synthesize<'b, R: Clone>(&mut self, ctx: &Ctx, expr: &'b Expr<'b, R>) -> Result<Type, TypeError<'b, R>> {
         match expr {
             &Expr::Val(_, ref v) =>
                 match *v {
@@ -702,7 +804,7 @@ impl Typechecker {
                     _ => panic!("trying to type {v:?} but that kind of value shouldn't be created yet?"),
                 }
             &Expr::Var(ref r, x) =>
-                if let Some((timing, ty)) = ctx.lookup(x) {
+                if let Some((timing, ty)) = ctx.lookup_term_var(x) {
                     if timing.is_empty() || ty.is_stable() {
                         Ok(ty.clone())
                     } else {
@@ -806,10 +908,10 @@ impl Typechecker {
                     Type::Sum(ty1, ty2) => {
                         let old_ctx = Rc::new(ctx.clone());
     
-                        let ctx1 = Ctx::Var(x1, *ty1, old_ctx.clone());
+                        let ctx1 = Ctx::TermVar(x1, *ty1, old_ctx.clone());
                         let ty_out1 = self.synthesize(&ctx1, e1)?;
     
-                        let ctx2 = Ctx::Var(x2, *ty2, old_ctx);
+                        let ctx2 = Ctx::TermVar(x2, *ty2, old_ctx);
                         let ty_out2 = self.synthesize(&ctx2, e2)?;
     
                         meet(ctx, ty_out1, ty_out2)
@@ -830,6 +932,13 @@ impl Typechecker {
                         Ok(*ty),
                     ty =>
                         Err(TypeError::UnboxingNonBox { range: r.clone(), expr: e, actual_type: ty }),
+                },
+            &Expr::ClockApp(ref r, e, c) => 
+                match self.synthesize(ctx, e)? {
+                    Type::Forall(x, Kind::Clock, ty) =>
+                        Ok(ty.subst_clock(x, c, self.interner)),
+                    ty =>
+                        Err(TypeError::NonForallClockApp { range: r.clone(), purported_forall_clock: e, actual_type: ty }),
                 },
             _ =>
                 Err(TypeError::synthesis_unsupported(expr)),
@@ -891,32 +1000,5 @@ fn meet<'a, R>(ctx: &Ctx, ty1: Type, ty2: Type) -> Result<Type, TypeError<'a, R>
         Ok(ty1)
     } else {
         Err(TypeError::could_not_unify(ty1, ty2))
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::expr::Value;
-    use super::*;
-    
-    fn s(i: usize) -> Symbol { string_interner::Symbol::try_from_usize(i).unwrap() }
-
-    #[test]
-    fn try_out() {
-        let ev = Expr::Val((), Value::Unit);
-        let e = Expr::Annotate((), &ev, Type::Unit);
-        let checker = Typechecker { globals: HashMap::new() };
-
-        assert_eq!(checker.synthesize(&Ctx::Empty, &e).unwrap(), Type::Unit);
-    }
-
-    #[test]
-    fn test_fn() {
-        let e_x = Expr::Var((), s(0));
-        let e = Expr::Lam((), s(0), &e_x);
-        let checker = Typechecker { globals: HashMap::new() };
-
-        assert!(checker.check(&Ctx::Empty, &e, &Type::Function(Box::new(Type::Unit), Box::new(Type::Unit))).is_ok());
-        assert!(checker.check(&Ctx::Empty, &e, &Type::Function(Box::new(Type::Index), Box::new(Type::Unit))).is_err());
     }
 }

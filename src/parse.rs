@@ -2,7 +2,7 @@ use string_interner::DefaultStringInterner;
 use typed_arena::Arena;
 use num::rational::Ratio;
 
-use crate::{expr::{Expr, Value, Symbol}, typing::{Type, ArraySize, Clock}};
+use crate::{expr::{Expr, Value, Symbol}, typing::{Type, ArraySize, Clock, Kind}};
 
 macro_rules! make_node_enum {
     ($enum_name:ident { $($rust_name:ident : $ts_name:ident),* } with matcher $matcher_name:ident) => {
@@ -58,6 +58,7 @@ make_node_enum!(ConcreteNode {
     DelayExpression: delay_expression,
     BoxExpression: box_expression,
     UnboxExpression: unbox_expression,
+    ClockAppExpression: clockapp_expression,
     Type: type,
     WrapType: wrap_type,
     BaseType: base_type,
@@ -67,7 +68,9 @@ make_node_enum!(ConcreteNode {
     SumType: sum_type,
     ArrayType: array_type,
     LaterType: later_type,
-    BoxType: box_type
+    BoxType: box_type,
+    ForallType: forall_type,
+    Kind: kind
 } with matcher ConcreteNodeMatcher);
 
 pub struct Parser<'a, 'b> {
@@ -273,6 +276,11 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let e = self.parse_expr(node.child(1).unwrap())?;
                 Ok(Expr::Unbox(node.range(), self.alloc(e)))
             },
+            Some(ConcreteNode::ClockAppExpression) => {
+                let e = self.parse_expr(node.child(0).unwrap())?;
+                let clock = self.parse_clock(node.child(3).unwrap())?;
+                Ok(Expr::ClockApp(node.range(), self.alloc(e), clock))
+            },
             Some(ConcreteNode::Type) |
             Some(ConcreteNode::BaseType) |
             Some(ConcreteNode::StreamType) |
@@ -283,6 +291,8 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             Some(ConcreteNode::ArrayInner) |
             Some(ConcreteNode::LaterType) |
             Some(ConcreteNode::BoxType) |
+            Some(ConcreteNode::ForallType) |
+            Some(ConcreteNode::Kind) |
             Some(ConcreteNode::FunctionType) =>
                 Err(ParseError::ExpectedExpression(node.range())),
             None => 
@@ -338,10 +348,23 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let ty = self.parse_type(node.child(1).unwrap())?;
                 Ok(Type::Box(Box::new(ty)))
             },
+            Some(ConcreteNode::ForallType) => {
+                let x = self.identifier(node.child(1).unwrap());
+                let k = self.parse_kind(node.child(3).unwrap())?;
+                let ty = self.parse_type(node.child(5).unwrap())?;
+                Ok(Type::Forall(x, k, Box::new(ty)))
+            },
             Some(_) =>
                 Err(ParseError::ExpectedType(node.range())),
             None =>
                 Err(ParseError::UnknownNodeType(node.range(), node.kind().into())),
+        }
+    }
+
+    fn parse_kind<'d>(&self, node: tree_sitter::Node<'d>) -> Result<Kind, ParseError> {
+        match self.node_text(node) {
+            "clock" => Ok(Kind::Clock),
+            kind => panic!("unknown kind {}", kind),
         }
     }
 

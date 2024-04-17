@@ -5,7 +5,8 @@ use std::process::ExitCode;
 use std::{collections::HashMap, path::PathBuf, fs::File};
 use std::io::Read;
 
-use string_interner::StringInterner;
+use expr::Expr;
+use string_interner::{StringInterner, DefaultStringInterner};
 
 use typed_arena::Arena;
 
@@ -76,9 +77,21 @@ fn read_file(name: Option<&Path>) -> std::io::Result<String> {
     Ok(s)
 }
 
-struct TopLevel<'a, 'b> {
-    parser: Parser<'a, 'b>,
-    checker: Typechecker,
+struct TopLevel<'a> {
+    interner: DefaultStringInterner,
+    arena: &'a Arena<Expr<'a, tree_sitter::Range>>,
+    globals: Globals,
+}
+
+impl<'a> TopLevel<'a> {
+    fn make_parser<'b>(&'b mut self) -> Parser<'b, 'a> {
+        // TODO: this does a bunch of processing we don't need to redo
+        Parser::new(&mut self.interner, &mut self.arena)
+    }
+
+    fn make_typechecker<'b>(&'b mut self) -> Typechecker<'b> {
+        Typechecker { globals: &self.globals, interner: &mut self.interner }
+    }
 }
 
 #[derive(Debug)]
@@ -139,11 +152,11 @@ impl<'a> From<hound::Error> for TopLevelError<'a> {
 
 type TopLevelResult<'a, T> = Result<T, TopLevelError<'a>>;
 
-fn cmd_parse<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>, dump_to: Option<PathBuf>) -> TopLevelResult<'a, ()> {
+fn cmd_parse<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, dump_to: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
-    match toplevel.parser.parse(&code) {
+    match toplevel.make_parser().parse(&code) {
         Ok(expr) => {
-            println!("{}", expr.pretty(toplevel.parser.interner));
+            println!("{}", expr.pretty(&toplevel.interner));
         },
         Err(parse::FullParseError { tree, error }) => {
             eprintln!("{:?}", error);
@@ -156,31 +169,31 @@ fn cmd_parse<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>, dump_to
     Ok(())
 }
 
-fn cmd_typecheck<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
+fn cmd_typecheck<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
-    let expr = match toplevel.parser.parse(&code) {
+    let expr = match toplevel.make_parser().parse(&code) {
         Ok(expr) => expr,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    let expr = toplevel.parser.arena.alloc(expr);
-    let ty = toplevel.checker.synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
-    println!("synthesized type: {}", ty.pretty(&toplevel.parser.interner));
+    let expr = toplevel.arena.alloc(expr);
+    let ty = toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
+    println!("synthesized type: {}", ty.pretty(&toplevel.interner));
     Ok(())
 }
 
-fn cmd_interpret<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
+fn cmd_interpret<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
-    let expr = match toplevel.parser.parse(&code) {
+    let expr = match toplevel.make_parser().parse(&code) {
         Ok(expr) => expr,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    let expr = toplevel.parser.arena.alloc(expr);
-    let ty = toplevel.checker.synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
-    println!("synthesized type: {}", ty.pretty(&toplevel.parser.interner));
+    let expr = toplevel.arena.alloc(expr);
+    let ty = toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
+    println!("synthesized type: {}", ty.pretty(&toplevel.interner));
 
     let arena = Arena::new();
     let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
-    let builtins = make_builtins(&mut toplevel.parser.interner);
+    let builtins = make_builtins(&mut toplevel.interner);
     let interp_ctx = interp::InterpretationContext { builtins: &builtins, env: HashMap::new() };
 
     match interp::interp(&interp_ctx, &expr_unannotated) {
@@ -191,14 +204,14 @@ fn cmd_interpret<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>) -> 
     Ok(())
 }
 
-fn repl_one<'a>(toplevel: &mut TopLevel<'_, 'a>, interp_ctx: &interp::InterpretationContext<'a, '_>, code: String) -> TopLevelResult<'a, ()> {
-    let expr = match toplevel.parser.parse(&code) {
+fn repl_one<'a>(toplevel: &mut TopLevel<'a>, interp_ctx: &interp::InterpretationContext<'a, '_>, code: String) -> TopLevelResult<'a, ()> {
+    let expr = match toplevel.make_parser().parse(&code) {
         Ok(expr) => expr,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    let expr = toplevel.parser.arena.alloc(expr);
-    let ty = toplevel.checker.synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
-    println!("synthesized type: {}", ty.pretty(&toplevel.parser.interner));
+    let expr = toplevel.arena.alloc(expr);
+    let ty = toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
+    println!("synthesized type: {}", ty.pretty(&toplevel.interner));
 
     let arena = Arena::new();
     let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
@@ -211,8 +224,8 @@ fn repl_one<'a>(toplevel: &mut TopLevel<'_, 'a>, interp_ctx: &interp::Interpreta
     Ok(())
 }
 
-fn cmd_repl<'a>(toplevel: &mut TopLevel<'_, 'a>) -> TopLevelResult<'a, ()> {
-    let builtins = make_builtins(&mut toplevel.parser.interner);
+fn cmd_repl<'a>(toplevel: &mut TopLevel<'a>) -> TopLevelResult<'a, ()> {
+    let builtins = make_builtins(&mut toplevel.interner);
     let interp_ctx = interp::InterpretationContext { builtins: &builtins, env: HashMap::new() };
 
     for line in std::io::stdin().lines() {
@@ -220,7 +233,7 @@ fn cmd_repl<'a>(toplevel: &mut TopLevel<'_, 'a>) -> TopLevelResult<'a, ()> {
             Ok(()) => { },
             Err(err @ TopLevelError::IoError(_)) => { return Err(err); },
             Err(TopLevelError::TypeError(code, e)) => {
-                println!("{}", e.pretty(toplevel.parser.interner, &code));
+                println!("{}", e.pretty(&toplevel.interner, &code));
             },
             Err(err) => { println!("{:?}", err); },
         }
@@ -229,22 +242,22 @@ fn cmd_repl<'a>(toplevel: &mut TopLevel<'_, 'a>) -> TopLevelResult<'a, ()> {
     Ok(())
 }
 
-fn cmd_sample<'a>(toplevel: &mut TopLevel<'_, 'a>, file: Option<PathBuf>, length: usize, out: PathBuf) -> TopLevelResult<'a, ()> {
+fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, length: usize, out: PathBuf) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
-    let expr = match toplevel.parser.parse(&code) {
+    let expr = match toplevel.make_parser().parse(&code) {
         Ok(expr) => expr,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    let expr = toplevel.parser.arena.alloc(expr);
+    let expr = toplevel.arena.alloc(expr);
 
-    match toplevel.checker.synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))? {
+    match toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))? {
         Type::Stream(_, ty) if *ty == Type::Sample => { },
         ty => { return Err(TopLevelError::CannotSample(ty)); },
     }
 
     let arena = Arena::new();
     let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
-    let builtins = make_builtins(&mut toplevel.parser.interner);
+    let builtins = make_builtins(&mut toplevel.interner);
     let mut samples = [0.0].repeat(48 * length);
 
     match get_samples(&builtins, &expr_unannotated, &mut samples[..]) {
@@ -285,9 +298,7 @@ fn main() -> Result<(), ExitCode> {
     globals.insert(pi, typing::Type::Sample);
     globals.insert(sin, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
 
-    let checker = Typechecker { globals };
-    let parser = Parser::new(&mut interner, &annot_arena);
-    let mut toplevel = TopLevel { parser, checker };
+    let mut toplevel = TopLevel { arena: &annot_arena, interner, globals };
 
     let res = match args.cmd {
         Command::Parse { file, dump_to } => cmd_parse(&mut toplevel, file, dump_to),
@@ -300,7 +311,7 @@ fn main() -> Result<(), ExitCode> {
     match res {
         Ok(()) => { },
         Err(TopLevelError::TypeError(code, e)) => {
-            println!("{}", e.pretty(toplevel.parser.interner, &code));
+            println!("{}", e.pretty(&toplevel.interner, &code));
             return Err(1.into());
         },
         Err(err) => { println!("{:?}", err); return Err(2.into()); },

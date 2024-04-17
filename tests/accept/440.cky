@@ -1,2 +1,2 @@
-let persamp = (div (mul 440.0 (mul 2.0 pi)) 48000.0) in
+let persamp = div (mul 440.0 (mul 2.0 pi)) 48000.0 in
 ((&^(k) s. \x. sin x :: `(!(unbox s) (add x persamp))) : sample -> ~^(k) sample) 0.0

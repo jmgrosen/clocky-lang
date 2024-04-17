@@ -144,6 +144,8 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
                 _ =>
                     Err("tried to unbox a non-box"),
             },
+        Expr::ClockApp(_, e, _) =>
+            interp(ctx, e),
     }
 }
 
