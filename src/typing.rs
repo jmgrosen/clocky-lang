@@ -51,6 +51,10 @@ impl Clock {
         PrettyClock { interner, clock: self }
     }
 
+    fn from_var(var: Symbol) -> Clock {
+        Clock { coeff: One::one(), var }
+    }
+
     /*
     // TODO: figure out better name for this
     pub fn compose(&self, other: &Clock) -> Option<Clock> {
@@ -116,12 +120,14 @@ impl<'a> fmt::Display for PrettyTiming<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     Clock,
+    Type,
 }
 
 impl fmt::Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Kind::Clock => write!(f, "clock"),
+            Kind::Type => write!(f, "type"),
         }
     }
 }
@@ -139,6 +145,34 @@ pub enum Type {
     Array(Box<Type>, ArraySize),
     Box(Box<Type>),
     Forall(Symbol, Kind, Box<Type>), // forall (x : k). ty
+    TypeVar(Symbol),
+}
+
+fn mk_fresh(prefix: Symbol, interner: &mut DefaultStringInterner) -> Symbol {
+    // TODO: this is super hacky and slow
+    let prefix_str = interner.resolve(prefix).unwrap();
+    let mut i = 0;
+    loop {
+        let poss = format!("{}{}", prefix_str, i);
+        if interner.get(poss.as_str()).is_none() {
+            return interner.get_or_intern(poss);
+        }
+        i += 1;
+    }
+}
+
+enum ToSubst {
+    Type(Type),
+    Clock(Clock),
+}
+
+impl ToSubst {
+    fn from_var(var: Symbol, kind: Kind) -> ToSubst {
+        match kind {
+            Kind::Clock => ToSubst::Clock(Clock::from_var(var)),
+            Kind::Type => ToSubst::Type(Type::TypeVar(var)),
+        }
+    }
 }
 
 impl Type {
@@ -160,10 +194,12 @@ impl Type {
             Type::Box(_) => true,
             // TODO: is this right? well, it's surely not unsafe, right?
             Type::Forall(_, _, _) => false,
+            // TODO: perhaps if we add constraints...
+            Type::TypeVar(_) => false,
         }
     }
 
-    fn subst_clock(&self, x: Symbol, c: Clock, interner: &mut DefaultStringInterner) -> Type {
+    fn subst(&self, x: Symbol, ts: &ToSubst, interner: &mut DefaultStringInterner) -> Type {
         match *self {
             Type::Unit =>
                 Type::Unit,
@@ -171,38 +207,82 @@ impl Type {
                 Type::Sample,
             Type::Index =>
                 Type::Index,
-            Type::Stream(d, ref ty) =>
-                Type::Stream(d.substitute(x, &c), Box::new(ty.subst_clock(x, c, interner))),
+            Type::Stream(d, ref ty) => {
+                let d_subst = if let &ToSubst::Clock(ref c) = ts {
+                    d.substitute(x, c)
+                } else { d };
+                Type::Stream(d_subst, Box::new(ty.subst(x, ts, interner)))
+            },
             Type::Function(ref ty1, ref ty2) =>
-                Type::Function(Box::new(ty1.subst_clock(x, c, interner)), Box::new(ty2.subst_clock(x, c, interner))),
+                Type::Function(Box::new(ty1.subst(x, ts, interner)), Box::new(ty2.subst(x, ts, interner))),
             Type::Product(ref ty1, ref ty2) =>
-                Type::Product(Box::new(ty1.subst_clock(x, c, interner)), Box::new(ty2.subst_clock(x, c, interner))),
+                Type::Product(Box::new(ty1.subst(x, ts, interner)), Box::new(ty2.subst(x, ts, interner))),
             Type::Sum(ref ty1, ref ty2) =>
-                Type::Sum(Box::new(ty1.subst_clock(x, c, interner)), Box::new(ty2.subst_clock(x, c, interner))),
-            Type::Later(d, ref ty) =>
-                Type::Later(d.substitute(x, &c), Box::new(ty.subst_clock(x, c, interner))),
+                Type::Sum(Box::new(ty1.subst(x, ts, interner)), Box::new(ty2.subst(x, ts, interner))),
+            Type::Later(d, ref ty) => {
+                let d_subst = if let &ToSubst::Clock(ref c) = ts {
+                    d.substitute(x, c)
+                } else { d };
+                Type::Later(d_subst, Box::new(ty.subst(x, ts, interner)))
+            },
             Type::Array(ref ty, ref size) =>
-                Type::Array(Box::new(ty.subst_clock(x, c, interner)), size.clone()),
+                Type::Array(Box::new(ty.subst(x, ts, interner)), size.clone()),
             Type::Box(ref ty) =>
-                Type::Box(Box::new(ty.subst_clock(x, c, interner))),
+                Type::Box(Box::new(ty.subst(x, ts, interner))),
             Type::Forall(y, k, ref ty) => {
                 if x == y {
-                    // TODO: this is super hacky and slow
-                    let y_name = interner.resolve(y).unwrap();
-                    let mut i = 0;
-                    let new_name = loop {
-                        let poss = format!("{}{}", y_name, i);
-                        if interner.get(poss.as_str()).is_none() {
-                            break interner.get_or_intern(poss);
-                        }
-                        i += 1;
+                    let new_name = mk_fresh(y, interner);
+                    let replacement = match k {
+                        Kind::Clock => ToSubst::Clock(Clock::from_var(new_name)),
+                        Kind::Type => ToSubst::Type(Type::TypeVar(new_name)),
                     };
-                    let freshened = ty.subst_clock(y, Clock { coeff: One::one(), var: new_name }, interner);
-                    Type::Forall(new_name, k, Box::new(freshened.subst_clock(x, c, interner)))
+                    let freshened = ty.subst(y, &replacement, interner);
+                    Type::Forall(new_name, k, Box::new(freshened.subst(x, ts, interner)))
                 } else {
-                    Type::Forall(y, k, Box::new(ty.subst_clock(x, c, interner)))
+                    Type::Forall(y, k, Box::new(ty.subst(x, ts, interner)))
                 }
             },
+            Type::TypeVar(y) =>
+                match *ts {
+                    ToSubst::Type(ref ty) if x == y => ty.clone(),
+                    _ => Type::TypeVar(y),
+                },
+        }
+    }
+
+    // TODO: return a better error type
+    fn check_validity(&self, ctx: &Ctx) -> Result<(), Symbol> {
+        match *self {
+            Type::Unit |
+            Type::Sample |
+            Type::Index =>
+                Ok(()),
+            Type::Stream(c, ref ty) |
+            Type::Later(c, ref ty) =>
+                if ctx.lookup_type_var(c.var) == Some(Kind::Clock) {
+                    ty.check_validity(ctx)
+                } else {
+                    Err(c.var)
+                },
+            Type::Function(ref ty1, ref ty2) |
+            Type::Product(ref ty1, ref ty2) |
+            Type::Sum(ref ty1, ref ty2) => {
+                ty1.check_validity(ctx)?;
+                ty2.check_validity(ctx)
+            },
+            Type::Array(ref ty, _) |
+            Type::Box(ref ty) =>
+                ty.check_validity(ctx),
+            Type::Forall(x, k, ref ty) => {
+                let new_ctx = Ctx::TypeVar(x, k, Rc::new(ctx.clone()));
+                ty.check_validity(&new_ctx)
+            },
+            Type::TypeVar(x) =>
+                if ctx.lookup_type_var(x) == Some(Kind::Type) {
+                    Ok(())
+                } else {
+                    Err(x)
+                },
         }
     }
 }
@@ -285,6 +365,8 @@ impl<'a> PrettyType<'a> {
                     write!(f, "for {} : {}. ", self.interner.resolve(x).unwrap(), k)?;
                     self.for_type(ty).fmt_prec(f, 0)
                 }),
+            Type::TypeVar(x) =>
+                write!(f, "{}", self.interner.resolve(x).unwrap()),
         }
     }
 }
@@ -469,6 +551,8 @@ pub enum TypeError<'a, R> {
     UnboxingNonBox { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
     CouldntCheck { expr: &'a Expr<'a, R>, expected_type: Type, synthesis_error: Option<Box<TypeError<'a, R>>> },
     NonForallClockApp { range: R, purported_forall_clock: &'a Expr<'a, R>, actual_type: Type },
+    NonForallTypeApp { range: R, purported_forall_type: &'a Expr<'a, R>, actual_type: Type },
+    InvalidType { range: R, purported_type: Type, bad_symbol: Symbol },
 }
 
 impl<'a, R> TypeError<'a, R> {
@@ -629,8 +713,14 @@ impl<'a> PrettyTypeError<'a, tree_sitter::Range> {
                 write!(f, "expected \"{}\" to have type \"{}\", but couldn't check that!",
                        self.for_expr(expr), self.for_type(expected_type)),
             TypeError::NonForallClockApp { purported_forall_clock, ref actual_type, .. } =>
-                write!(f, "can only apply clocks to forall types, but expression \"{}\" has type \"{}\"",
+                write!(f, "can only apply clocks to forall-clock types, but expression \"{}\" has type \"{}\"",
                        self.for_expr(purported_forall_clock), self.for_type(actual_type)),
+            TypeError::NonForallTypeApp { purported_forall_type, ref actual_type, .. } =>
+                write!(f, "can only apply types to forall-type types, but expression \"{}\" has type \"{}\"",
+                       self.for_expr(purported_forall_type), self.for_type(actual_type)),
+            TypeError::InvalidType { ref purported_type, bad_symbol, .. } =>
+                write!(f, "invalid type \"{}\"; could not find \"{}\" in the context",
+                       self.for_type(purported_type), self.interner.resolve(bad_symbol).unwrap()),
         }
     }
 }
@@ -785,7 +875,7 @@ impl<'a> Typechecker<'a> {
                         }),
                 };
 
-                if subtype(ctx, &synthesized, ty) {
+                if subtype(ctx, &synthesized, ty, self.interner) {
                     Ok(())
                 } else {
                     Err(TypeError::mismatching(expr, synthesized, ty.clone()))
@@ -820,11 +910,20 @@ impl<'a> Typechecker<'a> {
                 } else {
                     Err(TypeError::var_not_found(r.clone(), x))
                 },
-            &Expr::Annotate(ref r, e, ref ty) =>
+            &Expr::Annotate(ref r, e, ref ty) => {
+                ty.check_validity(ctx).map_err(|bad_symbol|
+                    TypeError::InvalidType {
+                        range: r.clone(),
+                        purported_type: ty.clone(),
+                        bad_symbol
+                    }
+                )?;
+
                 match self.check(ctx, e, ty) {
                     Ok(()) => Ok(ty.clone()),
                     Err(err) => Err(TypeError::bad_annotation(r.clone(), e, ty.clone(), err)),
-                },
+                }
+            },
             &Expr::App(ref r, e1, e2) =>
                 match self.synthesize(ctx, e1)? {
                     Type::Function(ty_a, ty_b) => {
@@ -914,7 +1013,7 @@ impl<'a> Typechecker<'a> {
                         let ctx2 = Ctx::TermVar(x2, *ty2, old_ctx);
                         let ty_out2 = self.synthesize(&ctx2, e2)?;
     
-                        meet(ctx, ty_out1, ty_out2)
+                        meet(ctx, ty_out1, ty_out2, self.interner)
                     },
                     ty =>
                         Err(TypeError::casing_non_sum(r.clone(), e0, ty)),
@@ -936,10 +1035,26 @@ impl<'a> Typechecker<'a> {
             &Expr::ClockApp(ref r, e, c) => 
                 match self.synthesize(ctx, e)? {
                     Type::Forall(x, Kind::Clock, ty) =>
-                        Ok(ty.subst_clock(x, c, self.interner)),
+                        Ok(ty.subst(x, &ToSubst::Clock(c), self.interner)),
                     ty =>
                         Err(TypeError::NonForallClockApp { range: r.clone(), purported_forall_clock: e, actual_type: ty }),
                 },
+            &Expr::TypeApp(ref r, e, ref ty_to_subst) => {
+                ty_to_subst.check_validity(ctx).map_err(|bad_symbol|
+                    TypeError::InvalidType {
+                        range: r.clone(),
+                        purported_type: ty_to_subst.clone(),
+                        bad_symbol
+                    }
+                )?;
+
+                match self.synthesize(ctx, e)? {
+                    Type::Forall(x, Kind::Type, ty) =>
+                        Ok(ty.subst(x, &ToSubst::Type(ty_to_subst.clone()), self.interner)),
+                    ty =>
+                        Err(TypeError::NonForallTypeApp { range: r.clone(), purported_forall_type: e, actual_type: ty }),
+                }
+            },
             _ =>
                 Err(TypeError::synthesis_unsupported(expr)),
         }
@@ -951,7 +1066,7 @@ impl<'a> Typechecker<'a> {
 // just call it that
 //
 // terminating: the sum of the sizes of the types decreases
-fn subtype(ctx: &Ctx, ty1: &Type, ty2: &Type) -> bool {
+fn subtype(ctx: &Ctx, ty1: &Type, ty2: &Type, interner: &mut DefaultStringInterner) -> bool {
     match (ty1, ty2) {
         (&Type::Unit, &Type::Unit) =>
             true,
@@ -960,43 +1075,53 @@ fn subtype(ctx: &Ctx, ty1: &Type, ty2: &Type) -> bool {
         (&Type::Index, &Type::Index) =>
             true,
         (&Type::Stream(ref c1, ref ty1p), &Type::Stream(ref c2, ref ty2p)) =>
-            c1 == c2 && subtype(ctx, ty1p, ty2p),
+            c1 == c2 && subtype(ctx, ty1p, ty2p, interner),
         (&Type::Function(ref ty1a, ref ty1b), &Type::Function(ref ty2a, ref ty2b)) =>
-            subtype(ctx, ty2a, ty1a) && subtype(ctx, ty1b, ty2b),
+            subtype(ctx, ty2a, ty1a, interner) && subtype(ctx, ty1b, ty2b, interner),
         (&Type::Product(ref ty1a, ref ty1b), &Type::Product(ref ty2a, ref ty2b)) =>
-            subtype(ctx, ty1a, ty2a) && subtype(ctx, ty1b, ty2b),
+            subtype(ctx, ty1a, ty2a, interner) && subtype(ctx, ty1b, ty2b, interner),
         (&Type::Sum(ref ty1a, ref ty1b), &Type::Sum(ref ty2a, ref ty2b)) =>
-            subtype(ctx, ty1a, ty2a) && subtype(ctx, ty1b, ty2b),
+            subtype(ctx, ty1a, ty2a, interner) && subtype(ctx, ty1b, ty2b, interner),
         (&Type::Later(ref c1, ref ty1p), &Type::Later(ref c2, ref ty2p)) =>
             match c1.partial_cmp(c2) {
                 Some(Ordering::Less) => {
                     // unwrap safety: we've already verified that c1 < c2
                     let rem = c1.uncompose(c2).unwrap();
-                    subtype(ctx, &Type::Later(rem, ty1p.clone()), ty2p)
+                    subtype(ctx, &Type::Later(rem, ty1p.clone()), ty2p, interner)
                 },
                 Some(Ordering::Equal) =>
-                    subtype(ctx, ty1p, ty2p),
+                    subtype(ctx, ty1p, ty2p, interner),
                 Some(Ordering::Greater) => {
                     // unwrap safety: we've already verified that c2 < c1
                     let rem = c2.uncompose(c1).unwrap();
-                    subtype(ctx, ty1p, &Type::Later(rem, ty2p.clone()))
+                    subtype(ctx, ty1p, &Type::Later(rem, ty2p.clone()), interner)
                 },
                 None =>
                     false,
             }
         (&Type::Array(ref ty1p, ref n1), &Type::Array(ref ty2p, ref n2)) =>
-            subtype(ctx, ty1p, ty2p) && n1 == n2,
+            subtype(ctx, ty1p, ty2p, interner) && n1 == n2,
         (&Type::Box(ref ty1p), &Type::Box(ref ty2p)) =>
-            subtype(ctx, ty1p, ty2p),
+            subtype(ctx, ty1p, ty2p, interner),
+        (&Type::Forall(x1, k1, ref ty1p), &Type::Forall(x2, k2, ref ty2p)) if k1 == k2 => {
+            let fresh_name = mk_fresh(x1, interner);
+            let replacement = ToSubst::from_var(fresh_name, k1);
+            let ty1p_subst = ty1p.subst(x1, &replacement, interner);
+            let ty2p_subst = ty2p.subst(x2, &replacement, interner);
+            let new_ctx = Ctx::TypeVar(fresh_name, k1, Rc::new(ctx.clone()));
+            subtype(&new_ctx, &ty1p_subst, &ty2p_subst, interner)
+        },
+        (&Type::TypeVar(x1), &Type::TypeVar(x2)) =>
+            x1 == x2,
         (_, _) =>
             false,
     }
 }
 
-fn meet<'a, R>(ctx: &Ctx, ty1: Type, ty2: Type) -> Result<Type, TypeError<'a, R>> {
-    if subtype(ctx, &ty1, &ty2) {
+fn meet<'a, R>(ctx: &Ctx, ty1: Type, ty2: Type, interner: &mut DefaultStringInterner) -> Result<Type, TypeError<'a, R>> {
+    if subtype(ctx, &ty1, &ty2, interner) {
         Ok(ty2)
-    } else if subtype(ctx, &ty2, &ty1) {
+    } else if subtype(ctx, &ty2, &ty1, interner) {
         Ok(ty1)
     } else {
         Err(TypeError::could_not_unify(ty1, ty2))

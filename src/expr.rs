@@ -53,6 +53,7 @@ pub enum Expr<'a, R> {
     Box(R, &'a Expr<'a, R>),
     Unbox(R, &'a Expr<'a, R>),
     ClockApp(R, &'a Expr<'a, R>, Clock),
+    TypeApp(R, &'a Expr<'a, R>, Type),
 }
 
 impl<'a, R> Expr<'a, R> {
@@ -78,6 +79,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::Box(ref r, ref e) => Expr::Box(f(r), arena.alloc(e.map_ext(arena, f))),
             Expr::Unbox(ref r, ref e) => Expr::Unbox(f(r), arena.alloc(e.map_ext(arena, f))),
             Expr::ClockApp(ref r, ref e, c) => Expr::ClockApp(f(r), arena.alloc(e.map_ext(arena, f)), c),
+            Expr::TypeApp(ref r, ref e, ref ty) => Expr::TypeApp(f(r), arena.alloc(e.map_ext(arena, f)), ty.clone()),
         }
     }
 
@@ -107,6 +109,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::Box(ref r, _) => r,
             Expr::Unbox(ref r, _) => r,
             Expr::ClockApp(ref r, _, _) => r,
+            Expr::TypeApp(ref r, _, _) => r,
         }
     }
 }
@@ -189,6 +192,8 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
                 write!(f, "Unbox({})", self.for_expr(e)),
             Expr::ClockApp(_, ref e, ref c) =>
                 write!(f, "ClockApp({}, {})", self.for_expr(e), self.for_clock(c)),
+            Expr::TypeApp(_, ref e, ref ty) =>
+                write!(f, "TypeApp({}, {})", self.for_expr(e), self.for_type(ty)),
         }
     }
 }

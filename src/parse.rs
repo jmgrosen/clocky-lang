@@ -59,6 +59,7 @@ make_node_enum!(ConcreteNode {
     BoxExpression: box_expression,
     UnboxExpression: unbox_expression,
     ClockAppExpression: clockapp_expression,
+    TypeAppExpression: typeapp_expression,
     Type: type,
     WrapType: wrap_type,
     BaseType: base_type,
@@ -70,6 +71,7 @@ make_node_enum!(ConcreteNode {
     LaterType: later_type,
     BoxType: box_type,
     ForallType: forall_type,
+    VarType: var_type,
     Kind: kind
 } with matcher ConcreteNodeMatcher);
 
@@ -281,6 +283,11 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let clock = self.parse_clock(node.child(3).unwrap())?;
                 Ok(Expr::ClockApp(node.range(), self.alloc(e), clock))
             },
+            Some(ConcreteNode::TypeAppExpression) => {
+                let e = self.parse_expr(node.child(0).unwrap())?;
+                let ty = self.parse_type(node.child(3).unwrap())?;
+                Ok(Expr::TypeApp(node.range(), self.alloc(e), ty))
+            },
             Some(ConcreteNode::Type) |
             Some(ConcreteNode::BaseType) |
             Some(ConcreteNode::StreamType) |
@@ -293,6 +300,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             Some(ConcreteNode::BoxType) |
             Some(ConcreteNode::ForallType) |
             Some(ConcreteNode::Kind) |
+            Some(ConcreteNode::VarType) |
             Some(ConcreteNode::FunctionType) =>
                 Err(ParseError::ExpectedExpression(node.range())),
             None => 
@@ -354,6 +362,10 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let ty = self.parse_type(node.child(5).unwrap())?;
                 Ok(Type::Forall(x, k, Box::new(ty)))
             },
+            Some(ConcreteNode::VarType) => {
+                let x = self.identifier(node);
+                Ok(Type::TypeVar(x))
+            },
             Some(_) =>
                 Err(ParseError::ExpectedType(node.range())),
             None =>
@@ -364,6 +376,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
     fn parse_kind<'d>(&self, node: tree_sitter::Node<'d>) -> Result<Kind, ParseError> {
         match self.node_text(node) {
             "clock" => Ok(Kind::Clock),
+            "type" => Ok(Kind::Type),
             kind => panic!("unknown kind {}", kind),
         }
     }

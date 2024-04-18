@@ -78,6 +78,8 @@ module.exports = grammar({
 
         clockapp_expression: $ => prec.left(seq($.expression, '@', '(', $.clock, ')')),
 
+        typeapp_expression: $ => prec.left(seq($.expression, '$', '(', $.clock, ')')),
+
         type: $ => choice(
             $.wrap_type,
             $.base_type,
@@ -88,7 +90,8 @@ module.exports = grammar({
             $.array_type,
             $.later_type,
             $.box_type,
-            $.forall_type
+            $.forall_type,
+            $.var_type
         ),
 
         wrap_type: $ => seq('(', $.type, ')'),
@@ -122,6 +125,8 @@ module.exports = grammar({
 
         forall_type: $ => prec.right(seq('for', $.identifier, ':', $.kind, '.', $.type)),
 
-        kind: $ => choice('clock')
+        var_type: $ => $.identifier,
+
+        kind: $ => choice('clock', 'type')
     }
 });

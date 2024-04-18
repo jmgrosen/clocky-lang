@@ -146,6 +146,8 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
             },
         Expr::ClockApp(_, e, _) =>
             interp(ctx, e),
+        Expr::TypeApp(_, e, _) =>
+            interp(ctx, e),
     }
 }
 

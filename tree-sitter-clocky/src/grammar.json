@@ -665,6 +665,35 @@
         ]
       }
     },
+    "typeapp_expression": {
+      "type": "PREC_LEFT",
+      "value": 0,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "SYMBOL",
+            "name": "expression"
+          },
+          {
+            "type": "STRING",
+            "value": "$"
+          },
+          {
+            "type": "STRING",
+            "value": "("
+          },
+          {
+            "type": "SYMBOL",
+            "name": "clock"
+          },
+          {
+            "type": "STRING",
+            "value": ")"
+          }
+        ]
+      }
+    },
     "type": {
       "type": "CHOICE",
       "members": [
@@ -707,6 +736,10 @@
         {
           "type": "SYMBOL",
           "name": "forall_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "var_type"
         }
       ]
     },
@@ -1000,12 +1033,20 @@
         ]
       }
     },
+    "var_type": {
+      "type": "SYMBOL",
+      "name": "identifier"
+    },
     "kind": {
       "type": "CHOICE",
       "members": [
         {
           "type": "STRING",
           "value": "clock"
+        },
+        {
+          "type": "STRING",
+          "value": "type"
         }
       ]
     }
