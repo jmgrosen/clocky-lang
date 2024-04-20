@@ -17,6 +17,8 @@ mod builtin;
 mod parse;
 mod interp;
 mod typing;
+mod ir0;
+mod ir1;
 
 use builtin::make_builtins;
 use interp::get_samples;
@@ -63,6 +65,10 @@ enum Command {
         #[arg(short='l', default_value_t=1000)]
         length: usize,
 
+        /// Code file to use
+        file: Option<PathBuf>,
+    },
+    Compile {
         /// Code file to use
         file: Option<PathBuf>,
     },
@@ -280,6 +286,37 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, length: us
     Ok(())
 }
 
+fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
+    let code = read_file(file.as_deref())?;
+    let expr = match toplevel.make_parser().parse(&code) {
+        Ok(expr) => expr,
+        Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
+    };
+    let expr = toplevel.arena.alloc(expr);
+    let ty = toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
+    println!("synthesized type: {}", ty.pretty(&toplevel.interner));
+
+    let mut builtin_globals = HashMap::new();
+    builtin_globals.insert(toplevel.interner.get_or_intern_static("add"), ir1::Global(0));
+    builtin_globals.insert(toplevel.interner.get_or_intern_static("div"), ir1::Global(1));
+    builtin_globals.insert(toplevel.interner.get_or_intern_static("mul"), ir1::Global(2));
+    builtin_globals.insert(toplevel.interner.get_or_intern_static("pi"), ir1::Global(3));
+    builtin_globals.insert(toplevel.interner.get_or_intern_static("sin"), ir1::Global(4));
+
+    let expr_under_arena = Arena::new();
+    let expr_ptr_arena = Arena::new();
+    let expr_arena = ir1::ExprArena { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
+    let translator = ir1::Translator { builtins: builtin_globals, arena: &expr_arena };
+
+    let expr_ir = translator.translate(std::rc::Rc::new(ir1::Ctx::Empty), expr);
+    println!("{expr_ir:?}");
+
+    let rewritten = translator.rewrite(&expr_ir);
+    println!("{rewritten:?}");
+
+    Ok(())
+}
+
 fn main() -> Result<(), ExitCode> {
     let args = Args::parse();
     let annot_arena = Arena::new();
@@ -306,6 +343,7 @@ fn main() -> Result<(), ExitCode> {
         Command::Interpret { file } => cmd_interpret(&mut toplevel, file),
         Command::Repl => cmd_repl(&mut toplevel),
         Command::Sample { out, file, length } => cmd_sample(&mut toplevel, file, length, out),
+        Command::Compile { file } => cmd_compile(&mut toplevel, file),
     };
 
     match res {

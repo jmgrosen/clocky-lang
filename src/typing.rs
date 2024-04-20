@@ -935,7 +935,7 @@ impl<'a> Typechecker<'a> {
                     ty =>
                         Err(TypeError::non_function_application(r.clone(), e1, ty)),
                 },
-            &Expr::Force(ref r, e1) => {
+            &Expr::Adv(ref r, e1) => {
                 // first we synthesize the type under the assumption
                 // that we can use any variable freely, then we strip
                 // the context according to what the type says we

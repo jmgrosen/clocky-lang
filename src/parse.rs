@@ -183,7 +183,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             },
             Some(ConcreteNode::ForceExpression) => {
                 let e = self.parse_expr(node.child(1).unwrap())?;
-                Ok(Expr::Force(node.range(), self.parser.arena.alloc(e)))
+                Ok(Expr::Adv(node.range(), self.parser.arena.alloc(e)))
             },
             Some(ConcreteNode::GenExpression) => {
                 let e1 = self.parse_expr(node.child(0).unwrap())?;

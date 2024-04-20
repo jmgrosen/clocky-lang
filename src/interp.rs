@@ -58,7 +58,7 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
                     Err("don't call something that's not a closure!!"),
             }
         },
-        Expr::Force(_, ref e) => {
+        Expr::Adv(_, ref e) => {
             let v = interp(ctx, &*e)?;
             let Value::Suspend(env1, ebody) = v else {
                 return Err("don't force something that's not a suspension!!");

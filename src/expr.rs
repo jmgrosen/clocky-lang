@@ -38,7 +38,7 @@ pub enum Expr<'a, R> {
     Annotate(R, &'a Expr<'a, R>, Type),
     Lam(R, Symbol, &'a Expr<'a, R>),
     App(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
-    Force(R, &'a Expr<'a, R>),
+    Adv(R, &'a Expr<'a, R>),
     Lob(R, Clock, Symbol, &'a Expr<'a, R>),
     Gen(R, &'a Expr<'a, R>, &'a Expr<'a, R>),
     LetIn(R, Symbol, Option<Type>, &'a Expr<'a, R>, &'a Expr<'a, R>),
@@ -64,7 +64,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::Annotate(ref r, e, ref ty) => Expr::Annotate(f(r), arena.alloc(e.map_ext(arena, f)), ty.clone()),
             Expr::Lam(ref r, s, ref e) => Expr::Lam(f(r), s, arena.alloc(e.map_ext(arena, f))),
             Expr::App(ref r, ref e1, ref e2) => Expr::App(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
-            Expr::Force(ref r, ref e) => Expr::Force(f(r), arena.alloc(e.map_ext(arena, f))),
+            Expr::Adv(ref r, ref e) => Expr::Adv(f(r), arena.alloc(e.map_ext(arena, f))),
             Expr::Lob(ref r, clock, s, ref e) => Expr::Lob(f(r), clock, s, arena.alloc(e.map_ext(arena, f))),
             Expr::Gen(ref r, ref e1, ref e2) => Expr::Gen(f(r), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
             Expr::LetIn(ref r, s, ref ty, ref e1, ref e2) => Expr::LetIn(f(r), s, ty.clone(), arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
@@ -94,7 +94,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::Annotate(ref r, _, _) => r,
             Expr::Lam(ref r, _, _) => r,
             Expr::App(ref r, _, _) => r,
-            Expr::Force(ref r, _) => r,
+            Expr::Adv(ref r, _) => r,
             Expr::Lob(ref r, _, _, _) => r,
             Expr::Gen(ref r, _, _) => r,
             Expr::LetIn(ref r, _, _, _, _) => r,
@@ -150,7 +150,7 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
                 write!(f, "App({}, {})", self.for_expr(e1), self.for_expr(e2)),
             Expr::Lam(_, x, ref e) =>
                 write!(f, "Lam({}, {})", self.name(x), self.for_expr(e)),
-            Expr::Force(_, ref e) =>
+            Expr::Adv(_, ref e) =>
                 write!(f, "Force({})", self.for_expr(e)),
             Expr::Lob(_, ref clock, x, ref e) =>
                 write!(f, "Lob({}, {}, {})", self.for_clock(clock), self.name(x), self.for_expr(e)),
