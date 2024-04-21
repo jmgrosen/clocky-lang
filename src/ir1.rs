@@ -108,7 +108,7 @@ pub enum Expr<'a> {
     Var(DebruijnIndex),
     Val(Value),
     Global(Global),
-    Lam(&'a Expr<'a>),
+    Lam(u32, &'a Expr<'a>),
     App(&'a Expr<'a>, &'a [&'a Expr<'a>]),
     Unbox(&'a Expr<'a>),
     Box(&'a Expr<'a>),
@@ -226,7 +226,7 @@ impl<'a> Expr<'a> {
             Var(i) => if i.is_within(depth) { Var(i) } else { Var(i.shifted_by(by)) },
             Val(v) => Val(v),
             Global(g) => Global(g),
-            Lam(e) => Lam(arena.alloc(e.shifted_by(by, depth + 1, arena))),
+            Lam(arity, e) => Lam(arity, arena.alloc(e.shifted_by(by, depth + arity, arena))),
             App(e0, es) => App(
                 arena.alloc(e0.shifted_by(by, depth, arena)),
                 arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by(by, depth, arena))))
@@ -256,7 +256,7 @@ impl<'a> Expr<'a> {
             Var(i) => if i.is_within(depth) { Var(i) } else { Var(i.shifted_by_signed(by)) },
             Val(v) => Val(v),
             Global(g) => Global(g),
-            Lam(e) => Lam(arena.alloc(e.shifted_by_signed(by, depth + 1, arena))),
+            Lam(arity, e) => Lam(arity, arena.alloc(e.shifted_by_signed(by, depth + arity, arena))),
             App(e0, es) => App(
                 arena.alloc(e0.shifted_by_signed(by, depth, arena)),
                 arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by_signed(by, depth, arena))))
@@ -336,7 +336,7 @@ impl<'a> Translator<'a> {
                 self.translate(ctx, next),
             HExpr::Lam(_, x, next) => {
                 let new_ctx = Rc::new(Ctx::Var(x, ctx));
-                Expr::Lam(self.alloc(self.translate(new_ctx, next)))
+                Expr::Lam(1, self.alloc(self.translate(new_ctx, next)))
             },
             HExpr::App(_, e1, e2) => {
                 let e1t = self.translate(ctx.clone(), e1);
@@ -465,9 +465,9 @@ impl RewriteType {
                 abstracted: arena.alloc(Expr::Adv(arena.alloc(Expr::Var(DebruijnIndex(hole_depth)))))
             },
             WithinLambda => Abstracted {
-                // hole_depth **does not include** the lambda we are under
-                binding: arena.alloc(Expr::Adv(arena.alloc(subterm.shifted_by_signed(-((hole_depth+1) as i32), 0, arena)))),
-                abstracted: arena.alloc(Expr::Var(DebruijnIndex(hole_depth+1)))
+                // hole_depth **includes** the lambda we are under
+                binding: arena.alloc(Expr::Adv(arena.alloc(subterm.shifted_by_signed(-(hole_depth as i32), 0, arena)))),
+                abstracted: arena.alloc(Expr::Var(DebruijnIndex(hole_depth)))
             },
         }
     }
@@ -493,7 +493,7 @@ impl<'a> Translator<'a> {
             Var(_) => None,
             Val(_) => None,
             Global(_) => None,
-            Lam(_) =>
+            Lam(_, _) =>
                 None,
             App(e0, es) =>
                 if let Some(abs) = self.abstract_adv(rew, depth, e0) {
@@ -604,14 +604,14 @@ impl<'a> Translator<'a> {
             Var(_) => expr,
             Val(_) => expr,
             Global(_) => expr,
-            Lam(e) => {
+            Lam(arity, e) => {
                 let mut ep = self.rewrite(e);
                 let mut bindings = Vec::new();
-                while let Some(abs) = self.abstract_adv(RewriteType::WithinLambda, 0, ep) {
+                while let Some(abs) = self.abstract_adv(RewriteType::WithinLambda, arity, ep) {
                     bindings.push(abs.binding);
                     ep = abs.abstracted;
                 }
-                self.build_lets(&bindings, self.alloc(Lam(ep)))
+                self.build_lets(&bindings, self.alloc(Lam(arity, ep)))
             },
             App(e, es) => self.alloc(App(self.rewrite(e), self.slice_rewrite(es))),
             Unbox(e) => self.alloc(Unbox(self.rewrite(e))),
