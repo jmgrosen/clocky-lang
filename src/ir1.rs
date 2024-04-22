@@ -1,4 +1,4 @@
-use std::{rc::Rc, collections::HashMap, mem::MaybeUninit, fmt};
+use std::{rc::Rc, collections::{HashMap, HashSet}, mem::MaybeUninit, fmt};
 
 use typed_arena::Arena;
 
@@ -114,16 +114,18 @@ impl Op {
     }
 }
 
+type VarSet = HashSet<DebruijnIndex>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr<'a> {
     Var(DebruijnIndex),
     Val(Value),
     Glob(Global),
-    Lam(u32, &'a Expr<'a>),
+    Lam(Option<VarSet>, u32, &'a Expr<'a>),
     App(&'a Expr<'a>, &'a [&'a Expr<'a>]),
     Unbox(&'a Expr<'a>),
-    Box(&'a Expr<'a>),
-    Lob(&'a Expr<'a>),
+    Box(Option<VarSet>, &'a Expr<'a>),
+    Lob(Option<VarSet>, &'a Expr<'a>),
     LetIn(&'a Expr<'a>, &'a Expr<'a>),
     Case(&'a Expr<'a>, &'a Expr<'a>, &'a Expr<'a>),
     Con(Con, &'a [&'a Expr<'a>]),
@@ -133,7 +135,7 @@ pub enum Expr<'a> {
     // the rewriting step of pulling Advances out of Delays and
     // Lams... and maybe we will want to handle allocation/GC
     // differently for them? idk
-    Delay(&'a Expr<'a>),
+    Delay(Option<VarSet>, &'a Expr<'a>),
     Adv(&'a Expr<'a>),
 }
 
@@ -259,14 +261,14 @@ impl<'a> Expr<'a> {
             Var(i) => if i.is_within(depth) { Var(i) } else { Var(i.shifted_by(by)) },
             Val(v) => Val(v),
             Glob(g) => Glob(g),
-            Lam(arity, e) => Lam(arity, arena.alloc(e.shifted_by(by, depth + arity, arena))),
+            Lam(ref vs, arity, e) => Lam(vs.clone(), arity, arena.alloc(e.shifted_by(by, depth + arity, arena))),
             App(e0, es) => App(
                 arena.alloc(e0.shifted_by(by, depth, arena)),
                 arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by(by, depth, arena))))
             ),
             Unbox(e) => Unbox(arena.alloc(e.shifted_by(by, depth, arena))),
-            Box(e) => Box(arena.alloc(e.shifted_by(by, depth, arena))),
-            Lob(e) => Lob(arena.alloc(e.shifted_by(by, depth + 1, arena))),
+            Box(ref vs, e) => Box(vs.clone(), arena.alloc(e.shifted_by(by, depth, arena))),
+            Lob(ref vs, e) => Lob(vs.clone(), arena.alloc(e.shifted_by(by, depth + 1, arena))),
             LetIn(e1, e2) => LetIn(
                 arena.alloc(e1.shifted_by(by, depth, arena)),
                 arena.alloc(e2.shifted_by(by, depth + 1, arena))
@@ -278,7 +280,7 @@ impl<'a> Expr<'a> {
             ),
             Con(con, es) => Con(con, arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by(by, depth, arena))))),
             Op(op, es) => Op(op, arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by(by, depth, arena))))),
-            Delay(e) => Delay(arena.alloc(e.shifted_by(by, depth, arena))),
+            Delay(ref vs, e) => Delay(vs.clone(), arena.alloc(e.shifted_by(by, depth, arena))),
             Adv(e) => Adv(arena.alloc(e.shifted_by(by, depth, arena))),
         }
     }
@@ -289,14 +291,14 @@ impl<'a> Expr<'a> {
             Var(i) => if i.is_within(depth) { Var(i) } else { Var(i.shifted_by_signed(by)) },
             Val(v) => Val(v),
             Glob(g) => Glob(g),
-            Lam(arity, e) => Lam(arity, arena.alloc(e.shifted_by_signed(by, depth + arity, arena))),
+            Lam(ref vs, arity, e) => Lam(vs.clone(), arity, arena.alloc(e.shifted_by_signed(by, depth + arity, arena))),
             App(e0, es) => App(
                 arena.alloc(e0.shifted_by_signed(by, depth, arena)),
                 arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by_signed(by, depth, arena))))
             ),
             Unbox(e) => Unbox(arena.alloc(e.shifted_by_signed(by, depth, arena))),
-            Box(e) => Box(arena.alloc(e.shifted_by_signed(by, depth, arena))),
-            Lob(e) => Lob(arena.alloc(e.shifted_by_signed(by, depth + 1, arena))),
+            Box(ref vs, e) => Box(vs.clone(), arena.alloc(e.shifted_by_signed(by, depth, arena))),
+            Lob(ref vs, e) => Lob(vs.clone(), arena.alloc(e.shifted_by_signed(by, depth + 1, arena))),
             LetIn(e1, e2) => LetIn(
                 arena.alloc(e1.shifted_by_signed(by, depth, arena)),
                 arena.alloc(e2.shifted_by_signed(by, depth + 1, arena))
@@ -308,7 +310,7 @@ impl<'a> Expr<'a> {
             ),
             Con(con, es) => Con(con, arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by_signed(by, depth, arena))))),
             Op(op, es) => Op(op, arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by_signed(by, depth, arena))))),
-            Delay(e) => Delay(arena.alloc(e.shifted_by_signed(by, depth, arena))),
+            Delay(ref vs, e) => Delay(vs.clone(), arena.alloc(e.shifted_by_signed(by, depth, arena))),
             Adv(e) => Adv(arena.alloc(e.shifted_by_signed(by, depth, arena))),
         }
     }
@@ -323,6 +325,7 @@ pub struct Translator<'a> {
 pub enum Ctx {
     Empty,
     Var(Symbol, Rc<Ctx>),
+    Silent(Rc<Ctx>),
 }
 
 impl Ctx {
@@ -333,6 +336,8 @@ impl Ctx {
             Ctx::Var(y, _) if x == y =>
                 Some(DebruijnIndex::HERE),
             Ctx::Var(_, ref next) =>
+                next.lookup(x).map(|i| i.shifted()),
+            Ctx::Silent(ref next) =>
                 next.lookup(x).map(|i| i.shifted()),
         }
     }
@@ -369,7 +374,7 @@ impl<'a> Translator<'a> {
                 self.translate(ctx, next),
             HExpr::Lam(_, x, next) => {
                 let new_ctx = Rc::new(Ctx::Var(x, ctx));
-                Expr::Lam(1, self.alloc(self.translate(new_ctx, next)))
+                Expr::Lam(None, 1, self.alloc(self.translate(new_ctx, next)))
             },
             HExpr::App(_, e1, e2) => {
                 let e1t = self.translate(ctx.clone(), e1);
@@ -383,7 +388,7 @@ impl<'a> Translator<'a> {
             HExpr::Lob(_, _, x, e) => {
                 let new_ctx = Rc::new(Ctx::Var(x, ctx));
                 let et = self.translate(new_ctx, e);
-                Expr::Lob(self.alloc(et))
+                Expr::Lob(None, self.alloc(et))
             },
             HExpr::Gen(_, e1, e2) => {
                 let e1t = self.translate(ctx.clone(), e1);
@@ -406,7 +411,7 @@ impl<'a> Translator<'a> {
                 // in the high level language? i guess somewhat
                 // because i don't have patterns
                 let e1t = self.translate(ctx.clone(), e1);
-                let new_ctx = Rc::new(Ctx::Var(x2, Rc::new(Ctx::Var(x1, ctx))));
+                let new_ctx = Rc::new(Ctx::Var(x2, Rc::new(Ctx::Var(x1, Rc::new(Ctx::Silent(ctx))))));
                 let e2t = self.translate(new_ctx, e2);
                 Expr::LetIn(self.alloc(e1t), self.alloc(
                     Expr::LetIn(self.alloc(
@@ -449,11 +454,11 @@ impl<'a> Translator<'a> {
                 // differently here depending on the clock, if we use
                 // that for eg garbage collection information
                 let et = self.translate(ctx, e);
-                Expr::Delay(self.alloc(et))
+                Expr::Delay(None, self.alloc(et))
             },
             HExpr::Box(_, e) => {
                 let et = self.translate(ctx, e);
-                Expr::Box(self.alloc(et))
+                Expr::Box(None, self.alloc(et))
             },
             HExpr::Unbox(_, e) => {
                 let et = self.translate(ctx, e);
@@ -526,7 +531,7 @@ impl<'a> Translator<'a> {
             Var(_) => None,
             Val(_) => None,
             Glob(_) => None,
-            Lam(_, _) =>
+            Lam(_, _, _) =>
                 None,
             App(e0, es) =>
                 if let Some(abs) = self.abstract_adv(rew, depth, e0) {
@@ -539,9 +544,9 @@ impl<'a> Translator<'a> {
             Unbox(e) =>
                 Some(self.abstract_adv(rew, depth, e)?
                          .map(|ea| self.alloc(Unbox(ea)))),
-            Box(_) =>
+            Box(_, _) =>
                 None,
-            Lob(_) =>
+            Lob(_, _) =>
                 None,
             LetIn(e1, e2) =>
                 if let Some(abs) = self.abstract_adv(rew, depth, e1) {
@@ -585,7 +590,7 @@ impl<'a> Translator<'a> {
                 } else {
                     None
                 },
-            Delay(_) =>
+            Delay(_, _) =>
                 None,
             // aha! finally we have found you!
             Adv(e) =>
@@ -637,31 +642,31 @@ impl<'a> Translator<'a> {
             Var(_) => expr,
             Val(_) => expr,
             Glob(_) => expr,
-            Lam(arity, e) => {
+            Lam(ref vars, arity, e) => {
                 let mut ep = self.rewrite(e);
                 let mut bindings = Vec::new();
                 while let Some(abs) = self.abstract_adv(RewriteType::WithinLambda, arity, ep) {
                     bindings.push(abs.binding);
                     ep = abs.abstracted;
                 }
-                self.build_lets(&bindings, self.alloc(Lam(arity, ep)))
+                self.build_lets(&bindings, self.alloc(Lam(vars.clone(), arity, ep)))
             },
             App(e, es) => self.alloc(App(self.rewrite(e), self.slice_rewrite(es))),
             Unbox(e) => self.alloc(Unbox(self.rewrite(e))),
-            Box(e) => self.alloc(Box(self.rewrite(e))),
-            Lob(e) => self.alloc(Lob(self.rewrite(e))),
+            Box(ref vars, e) => self.alloc(Box(vars.clone(), self.rewrite(e))),
+            Lob(ref vars, e) => self.alloc(Lob(vars.clone(), self.rewrite(e))),
             LetIn(e1, e2) => self.alloc(LetIn(self.rewrite(e1), self.rewrite(e2))),
             Case(e0, e1, e2) => self.alloc(Case(self.rewrite(e0), self.rewrite(e1), self.rewrite(e2))),
             Con(con, es) => self.alloc(Con(con, self.slice_rewrite(es))),
             Op(op, es) => self.alloc(Op(op, self.slice_rewrite(es))),
-            Delay(e) => {
+            Delay(ref vars, e) => {
                 let mut ep = self.rewrite(e);
                 let mut bindings = Vec::new();
                 while let Some(abs) = self.abstract_adv(RewriteType::WithinDelay, 0, ep) {
                     bindings.push(abs.binding);
                     ep = abs.abstracted;
                 }
-                self.build_lets(&bindings, self.alloc(Delay(ep)))
+                self.build_lets(&bindings, self.alloc(Delay(vars.clone(), ep)))
             },
             Adv(e) => self.alloc(Adv(self.rewrite(e))),
         }
@@ -669,6 +674,119 @@ impl<'a> Translator<'a> {
 
     fn slice_rewrite(&self, exprs: &[&'a Expr<'a>]) -> &'a [&'a Expr<'a>] {
         self.arena.alloc_slice_r(exprs.iter().map(|e| self.rewrite(e)))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum VarSetThunk {
+    Empty,
+    Var(DebruijnIndex),
+    Union(Rc<VarSetThunk>, Rc<VarSetThunk>),
+    Shift(u32, Rc<VarSetThunk>),
+}
+
+impl VarSetThunk {
+    fn to_var_set(&self) -> VarSet {
+        use VarSetThunk::*;
+        match *self {
+            Empty => HashSet::new(),
+            Var(i) => { let mut vs = HashSet::new(); vs.insert(i); vs },
+            Union(ref t1, ref t2) => {
+                let mut vs = t1.to_var_set();
+                vs.extend(t2.to_var_set().into_iter());
+                vs
+            },
+            Shift(n, ref t) =>
+                t.to_var_set().into_iter().filter_map(|i| if i.is_within(n) { None } else { Some(i.shifted_by_signed(-(n as i32))) }).collect(),
+        }
+    }
+}
+
+impl<'a> Translator<'a> {
+
+    pub fn annotate_used_vars(&self, expr: &'a Expr<'a>) -> (&'a Expr<'a>, VarSetThunk) {
+        use Expr::*;
+        match *expr {
+            Var(i) =>
+                (expr, VarSetThunk::Var(i)),
+            Val(_) =>
+                (expr, VarSetThunk::Empty),
+            Glob(_) =>
+                (expr, VarSetThunk::Empty),
+            Lam(None, arity, e) => {
+                let (ep, vs) = self.annotate_used_vars(e);
+                let shifted = VarSetThunk::Shift(arity, Rc::new(vs));
+                (self.alloc(Lam(Some(shifted.to_var_set()), arity, ep)), shifted)
+            },
+            Lam(Some(_), _, _) =>
+                panic!("why are you re-annotating???"),
+            App(e1, es) => {
+                let (e1p, vs1) = self.annotate_used_vars(e1);
+                let mut vss = Rc::new(vs1);
+                let esp = self.arena.alloc_slice_r(es.iter().map(|e| {
+                    let (ep, vs) = self.annotate_used_vars(e);
+                    vss = VarSetThunk::Union(vss.clone(), vs.into()).into();
+                    ep
+                }));
+                (self.alloc(App(e1p, esp)), (*vss).clone())
+            },
+            Unbox(e) => {
+                let (ep, vs) = self.annotate_used_vars(e);
+                (self.alloc(Unbox(ep)), vs)
+            },
+            Box(None, e) => {
+                let (ep, vs) = self.annotate_used_vars(e);
+                (self.alloc(Box(Some(vs.to_var_set()), ep)), vs)
+            },
+            Box(Some(_), _) =>
+                panic!("why are you re-annotating???"),
+            Lob(None, e) => {
+                let (ep, vs) = self.annotate_used_vars(e);
+                let shifted = VarSetThunk::Shift(1, Rc::new(vs));
+                (self.alloc(Lob(Some(shifted.to_var_set()), ep)), shifted)
+            },
+            Lob(Some(_), _) =>
+                panic!("why are you re-annotating???"),
+            LetIn(e1, e2) => {
+                let (e1p, vs1) = self.annotate_used_vars(e1);
+                let (e2p, vs2) = self.annotate_used_vars(e2);
+                (self.alloc(LetIn(e1p, e2p)), VarSetThunk::Union(vs1.into(), VarSetThunk::Shift(1, vs2.into()).into()))
+            },
+            Case(e0, e1, e2) => {
+                let (e0p, vs0) = self.annotate_used_vars(e0);
+                let (e1p, vs1) = self.annotate_used_vars(e1);
+                let (e2p, vs2) = self.annotate_used_vars(e2);
+                (self.alloc(Case(e0p, e1p, e2p)), VarSetThunk::Union(vs0.into(), VarSetThunk::Shift(1, VarSetThunk::Union(vs1.into(), vs2.into()).into()).into()))
+            },
+            Con(con, es) => {
+                let mut vss = Rc::new(VarSetThunk::Empty);
+                let esp = self.arena.alloc_slice_r(es.iter().map(|e| {
+                    let (ep, vs) = self.annotate_used_vars(e);
+                    vss = VarSetThunk::Union(vss.clone(), vs.into()).into();
+                    ep
+                }));
+                (self.alloc(Con(con, esp)), (*vss).clone())
+            },
+            Op(op, es) => {
+                let mut vss = Rc::new(VarSetThunk::Empty);
+                let esp = self.arena.alloc_slice_r(es.iter().map(|e| {
+                    let (ep, vs) = self.annotate_used_vars(e);
+                    vss = VarSetThunk::Union(vss.clone(), vs.into()).into();
+                    ep
+                }));
+                (self.alloc(Op(op, esp)), (*vss).clone())
+            },
+            Adv(e) => {
+                let (ep, vs) = self.annotate_used_vars(e);
+                (self.alloc(Adv(ep)), vs)
+            },
+            Delay(None, e) => {
+                let (ep, vs) = self.annotate_used_vars(e);
+                (self.alloc(Delay(Some(vs.to_var_set()), ep)), vs)
+            },
+            Delay(Some(_), _) =>
+                panic!("why are you re-annotating???"),
+        }
     }
 }
 

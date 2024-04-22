@@ -335,8 +335,11 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
     let expr_ir = translator.translate(std::rc::Rc::new(ir1::Ctx::Empty), main);
     println!("{expr_ir:?}");
 
-    let rewritten = translator.rewrite(&expr_ir);
-    println!("{rewritten:?}");
+    // let rewritten = translator.rewrite(&expr_ir);
+    // println!("{rewritten:?}");
+
+    let annotated = translator.annotate_used_vars(&expr_ir);
+    println!("{:?}", annotated.0);
 
     Ok(())
 }
