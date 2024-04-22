@@ -5,7 +5,8 @@ use std::process::ExitCode;
 use std::{collections::HashMap, path::PathBuf, fs::File};
 use std::io::Read;
 
-use expr::Expr;
+use expr::{Expr, Symbol};
+use num::One;
 use string_interner::{StringInterner, DefaultStringInterner};
 
 use typed_arena::Arena;
@@ -19,13 +20,14 @@ mod interp;
 mod typing;
 mod ir0;
 mod ir1;
+mod util;
 
 use builtin::make_builtins;
 use interp::get_samples;
 use parse::Parser;
 use typing::{Globals, Typechecker, Ctx};
 
-use crate::typing::Type;
+use crate::typing::{Type, TopLevelTypeError, Kind, Clock};
 
 #[derive(CliParser, Debug)]
 struct Args {
@@ -104,7 +106,7 @@ impl<'a> TopLevel<'a> {
 enum TopLevelError<'a> {
     IoError(std::io::Error),
     ParseError(String, parse::FullParseError),
-    TypeError(String, typing::TypeError<'a, tree_sitter::Range>),
+    TypeError(String, typing::FileTypeErrors<'a, tree_sitter::Range>),
     InterpError(String),
     CannotSample(Type),
     WavError(hound::Error),
@@ -160,9 +162,9 @@ type TopLevelResult<'a, T> = Result<T, TopLevelError<'a>>;
 
 fn cmd_parse<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, dump_to: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
-    match toplevel.make_parser().parse(&code) {
-        Ok(expr) => {
-            println!("{}", expr.pretty(&toplevel.interner));
+    match toplevel.make_parser().parse_file(&code) {
+        Ok(parsed_file) => {
+            println!("{}", parsed_file.pretty(&toplevel.interner));
         },
         Err(parse::FullParseError { tree, error }) => {
             eprintln!("{:?}", error);
@@ -177,32 +179,29 @@ fn cmd_parse<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, dump_to: Op
 
 fn cmd_typecheck<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
-    let expr = match toplevel.make_parser().parse(&code) {
-        Ok(expr) => expr,
+    let parsed_file = match toplevel.make_parser().parse_file(&code) {
+        Ok(parsed_file) => parsed_file,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    let expr = toplevel.arena.alloc(expr);
-    let ty = toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
-    println!("synthesized type: {}", ty.pretty(&toplevel.interner));
+    toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
     Ok(())
 }
 
 fn cmd_interpret<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
-    let expr = match toplevel.make_parser().parse(&code) {
-        Ok(expr) => expr,
+    let parsed_file = match toplevel.make_parser().parse_file(&code) {
+        Ok(parsed_file) => parsed_file,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    let expr = toplevel.arena.alloc(expr);
-    let ty = toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
-    println!("synthesized type: {}", ty.pretty(&toplevel.interner));
+    toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
 
     let arena = Arena::new();
-    let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
+    let defs: HashMap<Symbol, &Expr<'_, ()>> = parsed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
+    let main = *defs.get(&parsed_file.defs.last().unwrap().name).unwrap();
     let builtins = make_builtins(&mut toplevel.interner);
-    let interp_ctx = interp::InterpretationContext { builtins: &builtins, env: HashMap::new() };
+    let interp_ctx = interp::InterpretationContext { builtins: &builtins, defs: &defs, env: HashMap::new() };
 
-    match interp::interp(&interp_ctx, &expr_unannotated) {
+    match interp::interp(&interp_ctx, &main) {
         Ok(v) => println!("{:?}", v),
         Err(e) => return Err(TopLevelError::InterpError(e.into())),
     }
@@ -211,12 +210,15 @@ fn cmd_interpret<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopL
 }
 
 fn repl_one<'a>(toplevel: &mut TopLevel<'a>, interp_ctx: &interp::InterpretationContext<'a, '_>, code: String) -> TopLevelResult<'a, ()> {
-    let expr = match toplevel.make_parser().parse(&code) {
-        Ok(expr) => expr,
+    // this seems like a hack, but it seems like tree-sitter doesn't
+    // support parsing specific rules yet...
+    let code = format!("def main: unit = {}", code);
+    let expr = match toplevel.make_parser().parse_file(&code) {
+        Ok(parsed_file) => parsed_file.defs[0].body,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    let expr = toplevel.arena.alloc(expr);
-    let ty = toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
+    let empty_symbol = toplevel.interner.get_or_intern_static("");
+    let ty = toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, typing::FileTypeErrors { errs: vec![TopLevelTypeError::TypeError(empty_symbol, e)] } ))?;
     println!("synthesized type: {}", ty.pretty(&toplevel.interner));
 
     let arena = Arena::new();
@@ -232,14 +234,15 @@ fn repl_one<'a>(toplevel: &mut TopLevel<'a>, interp_ctx: &interp::Interpretation
 
 fn cmd_repl<'a>(toplevel: &mut TopLevel<'a>) -> TopLevelResult<'a, ()> {
     let builtins = make_builtins(&mut toplevel.interner);
-    let interp_ctx = interp::InterpretationContext { builtins: &builtins, env: HashMap::new() };
+    let interp_ctx = interp::InterpretationContext { builtins: &builtins, defs: &HashMap::new(), env: HashMap::new() };
 
     for line in std::io::stdin().lines() {
         match repl_one(toplevel, &interp_ctx, line?) {
             Ok(()) => { },
             Err(err @ TopLevelError::IoError(_)) => { return Err(err); },
             Err(TopLevelError::TypeError(code, e)) => {
-                println!("{}", e.pretty(&toplevel.interner, &code));
+                let TopLevelTypeError::TypeError(_, ref err) = e.errs[0] else { panic!() };
+                println!("{}", err.pretty(&toplevel.interner, &code));
             },
             Err(err) => { println!("{:?}", err); },
         }
@@ -248,25 +251,43 @@ fn cmd_repl<'a>(toplevel: &mut TopLevel<'a>) -> TopLevelResult<'a, ()> {
     Ok(())
 }
 
+fn verify_sample_type<'a>(type_: &Type) -> TopLevelResult<'a, ()> {
+    match *type_ {
+        Type::Forall(x, Kind::Clock, ref st) =>
+            match **st {
+                Type::Stream(Clock { coeff, var }, ref inner)
+                    if x == var && coeff.is_one() =>
+                    match **inner {
+                        Type::Sample =>
+                            Ok(()),
+                        _ => Err(TopLevelError::CannotSample(type_.clone())),
+                    },
+                _ =>
+                    Err(TopLevelError::CannotSample(type_.clone())),
+            },
+        _ =>
+            Err(TopLevelError::CannotSample(type_.clone())),
+    }
+}
+
 fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, length: usize, out: PathBuf) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
-    let expr = match toplevel.make_parser().parse(&code) {
-        Ok(expr) => expr,
+    let parsed_file = match toplevel.make_parser().parse_file(&code) {
+        Ok(parsed_file) => parsed_file,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    let expr = toplevel.arena.alloc(expr);
-
-    match toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))? {
-        Type::Stream(_, ty) if *ty == Type::Sample => { },
-        ty => { return Err(TopLevelError::CannotSample(ty)); },
-    }
+    toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
 
     let arena = Arena::new();
-    let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
+    let defs: HashMap<Symbol, &Expr<'_, ()>> = parsed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
+    let main_sym = toplevel.interner.get_or_intern_static("main");
+    let main_def = parsed_file.defs.iter().filter(|x| x.name == main_sym).next().unwrap();
+    verify_sample_type(&main_def.type_)?;
+    let main = *defs.get(&parsed_file.defs.last().unwrap().name).unwrap();
     let builtins = make_builtins(&mut toplevel.interner);
     let mut samples = [0.0].repeat(48 * length);
 
-    match get_samples(&builtins, &expr_unannotated, &mut samples[..]) {
+    match get_samples(&builtins, &defs, main, &mut samples[..]) {
         Ok(()) => { },
         Err(e) => return Err(TopLevelError::InterpError(e)),
     }
@@ -288,13 +309,14 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, length: us
 
 fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
-    let expr = match toplevel.make_parser().parse(&code) {
-        Ok(expr) => expr,
+    let parsed_file = match toplevel.make_parser().parse_file(&code) {
+        Ok(parsed_file) => parsed_file,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    let expr = toplevel.arena.alloc(expr);
-    let ty = toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, e))?;
-    println!("synthesized type: {}", ty.pretty(&toplevel.interner));
+    toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
+
+    let arena = Arena::new();
+    let defs: HashMap<Symbol, &Expr<'_, ()>> = parsed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
 
     let mut builtin_globals = HashMap::new();
     builtin_globals.insert(toplevel.interner.get_or_intern_static("add"), ir1::Global(0));
@@ -308,7 +330,9 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
     let expr_arena = ir1::ExprArena { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
     let translator = ir1::Translator { builtins: builtin_globals, arena: &expr_arena };
 
-    let expr_ir = translator.translate(std::rc::Rc::new(ir1::Ctx::Empty), expr);
+    // TODO: compile everything, ofc
+    let main = *defs.get(&parsed_file.defs.last().unwrap().name).unwrap();
+    let expr_ir = translator.translate(std::rc::Rc::new(ir1::Ctx::Empty), main);
     println!("{expr_ir:?}");
 
     let rewritten = translator.rewrite(&expr_ir);

@@ -3,6 +3,7 @@ use std::{rc::Rc, collections::HashMap, mem::MaybeUninit, fmt};
 use typed_arena::Arena;
 
 use crate::expr::{Expr as HExpr, Symbol, Value as HValue};
+// use crate::util::parenthesize;
 
 // okay, for real, what am i really getting here over just using u32...
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -46,6 +47,16 @@ pub enum Value {
     Unit,
     Sample(f32),
     Index(usize),
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Value::Unit => write!(f, "()"),
+            Value::Sample(x) => write!(f, "{}", x),
+            Value::Index(i) => write!(f, "{}", i),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +118,7 @@ impl Op {
 pub enum Expr<'a> {
     Var(DebruijnIndex),
     Val(Value),
-    Global(Global),
+    Glob(Global),
     Lam(u32, &'a Expr<'a>),
     App(&'a Expr<'a>, &'a [&'a Expr<'a>]),
     Unbox(&'a Expr<'a>),
@@ -125,6 +136,28 @@ pub enum Expr<'a> {
     Delay(&'a Expr<'a>),
     Adv(&'a Expr<'a>),
 }
+
+/*
+impl<'a> fmt::Display for Expr<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Expr::*;
+        // okay this time let's do something hacky and use the
+        // "precision" specified in the formatter as precedence
+        let prec = f.precision().unwrap_or(0);
+        match *self {
+            Var(i) =>
+                write!(f, "#{:?}", i),
+            Val(v) =>
+                write!(f, "{}", v),
+            Glob(Global(g)) =>
+                write!(f, "@{}", g),
+            Lam(arity, e) =>
+                parenthesize(f, prec > 0, |f| {
+                    write!(f, "\\");
+        }
+    }
+}
+*/
 
 pub struct ExprArena<'a> {
     pub arena: &'a Arena<Expr<'a>>,
@@ -225,7 +258,7 @@ impl<'a> Expr<'a> {
         match *self {
             Var(i) => if i.is_within(depth) { Var(i) } else { Var(i.shifted_by(by)) },
             Val(v) => Val(v),
-            Global(g) => Global(g),
+            Glob(g) => Glob(g),
             Lam(arity, e) => Lam(arity, arena.alloc(e.shifted_by(by, depth + arity, arena))),
             App(e0, es) => App(
                 arena.alloc(e0.shifted_by(by, depth, arena)),
@@ -255,7 +288,7 @@ impl<'a> Expr<'a> {
         match *self {
             Var(i) => if i.is_within(depth) { Var(i) } else { Var(i.shifted_by_signed(by)) },
             Val(v) => Val(v),
-            Global(g) => Global(g),
+            Glob(g) => Glob(g),
             Lam(arity, e) => Lam(arity, arena.alloc(e.shifted_by_signed(by, depth + arity, arena))),
             App(e0, es) => App(
                 arena.alloc(e0.shifted_by_signed(by, depth, arena)),
@@ -320,7 +353,7 @@ impl<'a> Translator<'a> {
                 if let Some(idx) = ctx.lookup(x) {
                     Expr::Var(idx)
                 } else if let Some(&glob) = self.builtins.get(&x) {
-                    Expr::Global(glob)
+                    Expr::Glob(glob)
                 } else {
                     panic!("couldn't find a variable??")
                 },
@@ -492,7 +525,7 @@ impl<'a> Translator<'a> {
         match *expr {
             Var(_) => None,
             Val(_) => None,
-            Global(_) => None,
+            Glob(_) => None,
             Lam(_, _) =>
                 None,
             App(e0, es) =>
@@ -603,7 +636,7 @@ impl<'a> Translator<'a> {
         match *expr {
             Var(_) => expr,
             Val(_) => expr,
-            Global(_) => expr,
+            Glob(_) => expr,
             Lam(arity, e) => {
                 let mut ep = self.rewrite(e);
                 let mut bindings = Vec::new();

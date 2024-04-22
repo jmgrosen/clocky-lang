@@ -197,3 +197,47 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
         }
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct TopLevelDef<'a, R> {
+    pub name: Symbol,
+    pub type_: Type,
+    pub body: &'a Expr<'a, R>,
+    pub range: R,
+}
+
+pub struct PrettyTopLevelLet<'a, R> {
+    interner: &'a DefaultStringInterner,
+    def: &'a TopLevelDef<'a, R>,
+}
+
+impl<'a, R> fmt::Display for PrettyTopLevelLet<'a, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "def {}: {} = {}", self.interner.resolve(self.def.name).unwrap(), self.def.type_.pretty(self.interner), self.def.body.pretty(self.interner))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SourceFile<'a, R> {
+    pub defs: Vec<TopLevelDef<'a, R>>,
+}
+
+impl<'a, R> SourceFile<'a, R> {
+    pub fn pretty(&'a self, interner: &'a DefaultStringInterner) -> PrettySourceFile<'a, R> {
+        PrettySourceFile { interner, file: self }
+    }
+}
+
+pub struct PrettySourceFile<'a, R> {
+    interner: &'a DefaultStringInterner,
+    file: &'a SourceFile<'a, R>,
+}
+
+impl<'a, R> fmt::Display for PrettySourceFile<'a, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for def in self.file.defs.iter() {
+            write!(f, "{}\n", PrettyTopLevelLet { interner: self.interner, def })?;
+        }
+        Ok(())
+    }
+}

@@ -2,7 +2,7 @@ use string_interner::DefaultStringInterner;
 use typed_arena::Arena;
 use num::rational::Ratio;
 
-use crate::{expr::{Expr, Value, Symbol}, typing::{Type, ArraySize, Clock, Kind}};
+use crate::{expr::{Expr, Value, SourceFile, Symbol, TopLevelDef}, typing::{Type, ArraySize, Clock, Kind}};
 
 macro_rules! make_node_enum {
     ($enum_name:ident { $($rust_name:ident : $ts_name:ident),* } with matcher $matcher_name:ident) => {
@@ -34,6 +34,7 @@ macro_rules! make_node_enum {
 // why isn't this information in the generated bindings...?
 make_node_enum!(ConcreteNode {
     SourceFile: source_file,
+    TopLevelDef: top_level_def,
     Expression: expression,
     WrapExpression: wrap_expression,
     Identifier: identifier,
@@ -97,12 +98,21 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
     }
 
-    pub fn parse(&mut self, text: &str) -> Result<Expr<'b, tree_sitter::Range>, FullParseError> {
+    pub fn parse_expr(&mut self, text: &str) -> Result<Expr<'b, tree_sitter::Range>, FullParseError> {
         // this unwrap should be safe because we make sure to set the language and don't set a timeout or cancellation flag
         let tree = self.parser.parse(text, None).unwrap();
         let root_node = tree.root_node();
         AbstractionContext { parser: self, original_text: text }
             .parse_expr(root_node)
+            .map_err(|error| FullParseError { tree, error })
+    }
+
+    pub fn parse_file(&mut self, text: &str) -> Result<SourceFile<'b, tree_sitter::Range>, FullParseError> {
+        // this unwrap should be safe because we make sure to set the language and don't set a timeout or cancellation flag
+        let tree = self.parser.parse(text, None).unwrap();
+        let root_node = tree.root_node();
+        AbstractionContext { parser: self, original_text: text }
+            .parse_file(root_node)
             .map_err(|error| FullParseError { tree, error })
     }
 }
@@ -142,11 +152,41 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
         self.parser.interner.get_or_intern(self.node_text(node))
     }
 
+    fn parse_file<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<SourceFile<'b, tree_sitter::Range>, ParseError> {
+        let Some(ConcreteNode::SourceFile) = self.parser.node_matcher.lookup(node.kind_id()) else {
+            return Err(ParseError::UhhhhhhWhat(node.range(), "you didn't pass me a file".to_string()));
+        };
+
+        let mut defs = Vec::new();
+        let mut cur = node.walk();
+        cur.goto_first_child();
+        loop {
+            defs.push(self.parse_top_level_let(cur.node())?);
+            if !cur.goto_next_sibling() {
+                break;
+            }
+        }
+
+        Ok(SourceFile { defs })
+    }
+
+    fn parse_top_level_let<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<TopLevelDef<'b, tree_sitter::Range>, ParseError> {
+        let Some(ConcreteNode::TopLevelDef) = self.parser.node_matcher.lookup(node.kind_id()) else {
+            return Err(ParseError::UhhhhhhWhat(node.range(), "expected a top-level let here".to_string()));
+        };
+
+        let body = self.parse_expr(node.child(5).unwrap())?;
+        Ok(TopLevelDef {
+            name: self.identifier(node.child(1).unwrap()),
+            type_: self.parse_type(node.child(3).unwrap())?,
+            body: self.alloc(body),
+            range: node.range(),
+        })
+    }
+
     fn parse_expr<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<Expr<'b, tree_sitter::Range>, ParseError> {
         // TODO: use a TreeCursor instead
         match self.parser.node_matcher.lookup(node.kind_id()) {
-            Some(ConcreteNode::SourceFile) =>
-                self.parse_expr(node.child(0).unwrap()),
             Some(ConcreteNode::Expression) =>
                 self.parse_expr(node.child(0).unwrap()),
             Some(ConcreteNode::WrapExpression) =>
@@ -288,20 +328,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let ty = self.parse_type(node.child(3).unwrap())?;
                 Ok(Expr::TypeApp(node.range(), self.alloc(e), ty))
             },
-            Some(ConcreteNode::Type) |
-            Some(ConcreteNode::BaseType) |
-            Some(ConcreteNode::StreamType) |
-            Some(ConcreteNode::WrapType) |
-            Some(ConcreteNode::ProductType) |
-            Some(ConcreteNode::SumType) |
-            Some(ConcreteNode::ArrayType) |
-            Some(ConcreteNode::ArrayInner) |
-            Some(ConcreteNode::LaterType) |
-            Some(ConcreteNode::BoxType) |
-            Some(ConcreteNode::ForallType) |
-            Some(ConcreteNode::Kind) |
-            Some(ConcreteNode::VarType) |
-            Some(ConcreteNode::FunctionType) =>
+            Some(_) =>
                 Err(ParseError::ExpectedExpression(node.range())),
             None => 
                 Err(ParseError::UnknownNodeType(node.range(), node.kind().into())),

@@ -2,7 +2,9 @@ module.exports = grammar({
     name: 'clocky',
 
     rules: {
-        source_file: $ => $.expression,
+        source_file: $ => repeat1($.top_level_def),
+
+        top_level_def: $ => seq('def', $.identifier, ':', $.type, '=', $.expression),
 
         expression: $ => choice(
             $.wrap_expression,

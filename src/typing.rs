@@ -8,7 +8,8 @@ use num::{One, rational::Ratio};
 use string_interner::DefaultStringInterner;
 use indenter::{Format, indented, Indented};
 
-use crate::expr::{Symbol, Expr, Value};
+use crate::expr::{SourceFile, Symbol, Expr, Value};
+use crate::util::parenthesize;
 
 // eventually this will get more complicated...
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -284,16 +285,6 @@ impl Type {
                     Err(x)
                 },
         }
-    }
-}
-
-fn parenthesize(f: &mut fmt::Formatter<'_>, p: bool, inner: impl FnOnce(&mut fmt::Formatter<'_>) -> fmt::Result) -> fmt::Result {
-    if p {
-        write!(f, "(")?;
-        inner(f)?;
-        write!(f, ")")
-    } else {
-        inner(f)
     }
 }
 
@@ -1058,6 +1049,66 @@ impl<'a> Typechecker<'a> {
             _ =>
                 Err(TypeError::synthesis_unsupported(expr)),
         }
+    }
+
+    pub fn check_file<'c, 'b, R: Clone>(&mut self, file: &'c SourceFile<'b, R>) -> Result<(), FileTypeErrors<'b, R>> {
+        let mut errs = Vec::new();
+        let mut ctx = Ctx::Empty;
+        for def in file.defs.iter() {
+            if let Err(err) = self.check(&ctx, &def.body, &def.type_) {
+                errs.push(TopLevelTypeError::TypeError(def.name, err));
+            }
+            if ctx.lookup_term_var(def.name).is_some() {
+                errs.push(TopLevelTypeError::CannotRedefine(def.name, def.range.clone()));
+            } else {
+                ctx = Ctx::TermVar(def.name, def.type_.clone(), Rc::new(ctx));
+            }
+        }
+
+        if errs.is_empty() {
+            Ok(())
+        } else {
+            Err(FileTypeErrors { errs })
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum TopLevelTypeError<'b, R> {
+    TypeError(Symbol, TypeError<'b, R>),
+    CannotRedefine(Symbol, R),
+}
+
+#[derive(Debug)]
+pub struct FileTypeErrors<'b, R> {
+    pub errs: Vec<TopLevelTypeError<'b, R>>,
+}
+
+impl<'b, R> FileTypeErrors<'b, R> {
+    pub fn pretty(&'b self, interner: &'b DefaultStringInterner, code: &'b str) -> PrettyFileTypeErrors<'b, R> {
+        PrettyFileTypeErrors { interner, code, errs: self }
+    }
+}
+
+pub struct PrettyFileTypeErrors<'b, R> {
+    interner: &'b DefaultStringInterner,
+    code: &'b str,
+    errs: &'b FileTypeErrors<'b, R>,
+}
+
+impl<'b> fmt::Display for PrettyFileTypeErrors<'b, tree_sitter::Range> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for err in self.errs.errs.iter() {
+            match *err {
+                TopLevelTypeError::TypeError(name, ref err) =>
+                    write!(f, "in definition of \"{}\": {}",
+                           self.interner.resolve(name).unwrap(),
+                           err.pretty(self.interner, self.code))?,
+                TopLevelTypeError::CannotRedefine(name, _) =>
+                    write!(f, "cannot redefine \"{}\"", self.interner.resolve(name).unwrap())?,
+            }
+        }
+        Ok(())
     }
 }
 

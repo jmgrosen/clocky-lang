@@ -541,11 +541,11 @@
     "named": true,
     "fields": {},
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": true,
       "types": [
         {
-          "type": "expression",
+          "type": "top_level_def",
           "named": true
         }
       ]
@@ -578,6 +578,29 @@
       "multiple": true,
       "required": true,
       "types": [
+        {
+          "type": "type",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "top_level_def",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "expression",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
         {
           "type": "type",
           "named": true
@@ -853,6 +876,10 @@
   },
   {
     "type": "clock",
+    "named": false
+  },
+  {
+    "type": "def",
     "named": false
   },
   {

@@ -1,14 +1,17 @@
-use crate::expr::{Expr, Value, Env};
+use std::collections::HashMap;
+
+use crate::expr::{Expr, Value, Env, Symbol};
 use crate::builtin::BuiltinsMap;
 
 pub struct InterpretationContext<'a, 'b> {
     pub builtins: &'b BuiltinsMap,
+    pub defs: &'b HashMap<Symbol, &'a Expr<'a, ()>>,
     pub env: Env<'a>,
 }
 
 impl<'a, 'b> InterpretationContext<'a, 'b> {
     fn with_env(&self, new_env: Env<'a>) -> InterpretationContext<'a, 'b> {
-        InterpretationContext { builtins: self.builtins, env: new_env }
+        InterpretationContext { env: new_env, ..*self }
     }
 }
 
@@ -17,6 +20,8 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
         Expr::Var(_, ref x) => {
             if let Some(v) = ctx.env.get(x) {
                 Ok(v.clone())
+            } else if let Some(e) = ctx.defs.get(x) {
+                interp(&ctx.with_env(Env::new()), e)
             } else if let Some(&builtin) = ctx.builtins.get(x) {
                 if builtin.n_args == 0 {
                     (builtin.body)(&[])
@@ -151,8 +156,8 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
     }
 }
 
-pub fn get_samples<'a>(builtins: &'a BuiltinsMap, mut expr: &'a Expr<'a, ()>, out: &mut [f32]) -> Result<(), String> {
-    let mut ctx = InterpretationContext { builtins, env: Env::new() };
+pub fn get_samples<'a>(builtins: &'a BuiltinsMap, defs: &'a HashMap<Symbol, &'a Expr<'a, ()>>, mut expr: &'a Expr<'a, ()>, out: &mut [f32]) -> Result<(), String> {
+    let mut ctx = InterpretationContext { builtins, defs, env: Env::new() };
     for (i, s_out) in out.iter_mut().enumerate() {
         match interp(&ctx, expr) {
             Ok(Value::Gen(head, tail)) => {

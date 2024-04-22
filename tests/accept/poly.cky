@@ -1,7 +1,7 @@
-let map: for a : type. for b : type. for k : clock.
+def map: for a : type. for b : type. for k : clock.
   [](a -> b) -> ~^(k) a -> ~^(k) b =
   \f. &^(k) m. \s.
     let (x, sp) = *s in
     unbox f x :: `(!(unbox m) !sp)
-  in
-()
+
+def foo: sample = 3.0
