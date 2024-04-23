@@ -343,7 +343,19 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
     println!("{:?}\n", annotated);
 
     let shifted = translator.shift(annotated, 0, 0, &imbl::HashMap::new());
-    println!("{:?}", shifted);
+    println!("{:?}\n", shifted);
+
+    let expr2_under_arena = Arena::new();
+    let expr2_ptr_arena = Arena::new();
+    let expr2_arena = util::ArenaPlus { arena: &expr2_under_arena, ptr_arena: &expr2_ptr_arena };
+    let mut translator2 = ir2::Translator { arena: &expr2_arena, funcs: Vec::new() };
+
+    let translated2 = translator2.translate(shifted);
+    println!("{:?}\n", translated2);
+
+    for (i, func) in translator2.funcs.iter().enumerate() {
+        println!("func {i}: {func:?}");
+    }
 
     Ok(())
 }
