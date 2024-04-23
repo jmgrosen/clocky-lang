@@ -44,7 +44,7 @@ impl DebruijnIndex {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Global(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Value {
     Unit,
     Sample(f32),
@@ -83,8 +83,9 @@ impl Con {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Op {
+    Const(Value),
     Add,
     Sub,
     Mul,
@@ -92,26 +93,27 @@ pub enum Op {
     Sin,
     Cos,
     Pi,
-    Fst,
-    Snd,
+    Proj(u32),
     UnGen,
     Force,
+    AllocAndFill
 }
 
 impl Op {
-    fn arity(&self) -> u8 {
+    fn arity(&self) -> Option<u8> {
         match *self {
-            Op::Add => 2,
-            Op::Sub => 2,
-            Op::Mul => 2,
-            Op::Div => 2,
-            Op::Sin => 1,
-            Op::Cos => 1,
-            Op::Pi => 0,
-            Op::Fst => 1,
-            Op::Snd => 1,
-            Op::UnGen => 1,
-            Op::Force => 1,
+            Op::Const(_) => Some(0),
+            Op::Add => Some(2),
+            Op::Sub => Some(2),
+            Op::Mul => Some(2),
+            Op::Div => Some(2),
+            Op::Sin => Some(1),
+            Op::Cos => Some(1),
+            Op::Pi => Some(0),
+            Op::Proj(_) => Some(1),
+            Op::UnGen => Some(1),
+            Op::Force => Some(1),
+            Op::AllocAndFill => None,
         }
     }
 }
@@ -420,12 +422,12 @@ impl<'a> Translator<'a> {
                 let e2t = self.translate(new_ctx, e2);
                 Expr::LetIn(self.alloc(e1t), self.alloc(
                     Expr::LetIn(self.alloc(
-                        Expr::Op(Op::Fst, self.alloc_slice([self.alloc(
+                        Expr::Op(Op::Proj(0), self.alloc_slice([self.alloc(
                             Expr::Var(DebruijnIndex::HERE)
                         )]))
                     ), self.alloc(
                         Expr::LetIn(self.alloc(
-                            Expr::Op(Op::Snd, self.alloc_slice([self.alloc(
+                            Expr::Op(Op::Proj(1), self.alloc_slice([self.alloc(
                                 Expr::Var(DebruijnIndex::HERE.shifted())
                             )]))
                         ), self.alloc(e2t))))))
