@@ -333,13 +333,16 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
     // TODO: compile everything, ofc
     let main = *defs.get(&parsed_file.defs.last().unwrap().name).unwrap();
     let expr_ir = translator.translate(std::rc::Rc::new(ir1::Ctx::Empty), main);
-    println!("{expr_ir:?}");
+    println!("{expr_ir:?}\n");
 
     // let rewritten = translator.rewrite(&expr_ir);
     // println!("{rewritten:?}");
 
-    let annotated = translator.annotate_used_vars(&expr_ir);
-    println!("{:?}", annotated.0);
+    let (annotated, _) = translator.annotate_used_vars(&expr_ir);
+    println!("{:?}\n", annotated);
+
+    let shifted = translator.shift(annotated, 0, 0, &imbl::HashMap::new());
+    println!("{:?}", shifted);
 
     Ok(())
 }

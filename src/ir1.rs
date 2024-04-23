@@ -2,6 +2,8 @@ use std::{rc::Rc, collections::{HashMap, HashSet}, mem::MaybeUninit, fmt};
 
 use typed_arena::Arena;
 
+use imbl as im;
+
 use crate::expr::{Expr as HExpr, Symbol, Value as HValue};
 // use crate::util::parenthesize;
 
@@ -114,18 +116,21 @@ impl Op {
     }
 }
 
-type VarSet = HashSet<DebruijnIndex>;
+// TODO: change this out for some sort of bit set -- particularly one
+// that has an optimization for small sizes, bc i imagine that will be
+// the *very* common case
+type VarsUsed = Vec<DebruijnIndex>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr<'a> {
     Var(DebruijnIndex),
     Val(Value),
     Glob(Global),
-    Lam(Option<VarSet>, u32, &'a Expr<'a>),
+    Lam(Option<VarsUsed>, u32, &'a Expr<'a>),
     App(&'a Expr<'a>, &'a [&'a Expr<'a>]),
     Unbox(&'a Expr<'a>),
-    Box(Option<VarSet>, &'a Expr<'a>),
-    Lob(Option<VarSet>, &'a Expr<'a>),
+    Box(Option<VarsUsed>, &'a Expr<'a>),
+    Lob(Option<VarsUsed>, &'a Expr<'a>),
     LetIn(&'a Expr<'a>, &'a Expr<'a>),
     Case(&'a Expr<'a>, &'a Expr<'a>, &'a Expr<'a>),
     Con(Con, &'a [&'a Expr<'a>]),
@@ -135,7 +140,7 @@ pub enum Expr<'a> {
     // the rewriting step of pulling Advances out of Delays and
     // Lams... and maybe we will want to handle allocation/GC
     // differently for them? idk
-    Delay(Option<VarSet>, &'a Expr<'a>),
+    Delay(Option<VarsUsed>, &'a Expr<'a>),
     Adv(&'a Expr<'a>),
 }
 
@@ -686,7 +691,7 @@ pub enum VarSetThunk {
 }
 
 impl VarSetThunk {
-    fn to_var_set(&self) -> VarSet {
+    fn to_var_set(&self) -> HashSet<DebruijnIndex> {
         use VarSetThunk::*;
         match *self {
             Empty => HashSet::new(),
@@ -699,6 +704,26 @@ impl VarSetThunk {
             Shift(n, ref t) =>
                 t.to_var_set().into_iter().filter_map(|i| if i.is_within(n) { None } else { Some(i.shifted_by_signed(-(n as i32))) }).collect(),
         }
+    }
+
+    fn to_vars_used(&self) -> VarsUsed {
+        self.to_var_set().into_iter().collect()
+    }
+}
+
+type EnvMap = im::HashMap<DebruijnIndex, DebruijnIndex>;
+
+fn mk_env(used: &[DebruijnIndex]) -> EnvMap {
+    used.iter().copied().zip((0..).map(DebruijnIndex)).collect()
+}
+
+fn remap_var(env_map: &EnvMap, locals: u32, i: DebruijnIndex) -> DebruijnIndex {
+    if i.is_within(locals) {
+        i
+    } else {
+        env_map.get(&i.shifted_by_signed(-(locals as i32)))
+               .expect("couldn't find variable in annotated environment?")
+               .shifted_by(locals)
     }
 }
 
@@ -716,7 +741,7 @@ impl<'a> Translator<'a> {
             Lam(None, arity, e) => {
                 let (ep, vs) = self.annotate_used_vars(e);
                 let shifted = VarSetThunk::Shift(arity, Rc::new(vs));
-                (self.alloc(Lam(Some(shifted.to_var_set()), arity, ep)), shifted)
+                (self.alloc(Lam(Some(shifted.to_vars_used()), arity, ep)), shifted)
             },
             Lam(Some(_), _, _) =>
                 panic!("why are you re-annotating???"),
@@ -736,14 +761,14 @@ impl<'a> Translator<'a> {
             },
             Box(None, e) => {
                 let (ep, vs) = self.annotate_used_vars(e);
-                (self.alloc(Box(Some(vs.to_var_set()), ep)), vs)
+                (self.alloc(Box(Some(vs.to_vars_used()), ep)), vs)
             },
             Box(Some(_), _) =>
                 panic!("why are you re-annotating???"),
             Lob(None, e) => {
                 let (ep, vs) = self.annotate_used_vars(e);
                 let shifted = VarSetThunk::Shift(1, Rc::new(vs));
-                (self.alloc(Lob(Some(shifted.to_var_set()), ep)), shifted)
+                (self.alloc(Lob(Some(shifted.to_vars_used()), ep)), shifted)
             },
             Lob(Some(_), _) =>
                 panic!("why are you re-annotating???"),
@@ -782,10 +807,76 @@ impl<'a> Translator<'a> {
             },
             Delay(None, e) => {
                 let (ep, vs) = self.annotate_used_vars(e);
-                (self.alloc(Delay(Some(vs.to_var_set()), ep)), vs)
+                (self.alloc(Delay(Some(vs.to_vars_used()), ep)), vs)
             },
             Delay(Some(_), _) =>
                 panic!("why are you re-annotating???"),
+        }
+    }
+
+    pub fn shift(&self, expr: &'a Expr<'a>, depth: u32, locals: u32, env_map: &EnvMap) -> &'a Expr<'a> {
+        use Expr::*;
+        match *expr {
+            Var(i) =>
+                self.alloc(Var(remap_var(env_map, locals, i))),
+            Val(_) =>
+                expr,
+            Glob(_) =>
+                expr,
+            Lam(Some(ref used), arity, e) => {
+                let new_depth = depth + locals;
+                let ep = self.shift(e, new_depth, arity, &mk_env(&used));
+                let used_remapped = used.iter().map(|&i| remap_var(env_map, locals, i)).collect();
+                self.alloc(Lam(Some(used_remapped), arity, ep))
+            },
+            Lam(None, _, _) =>
+                panic!("must annotate before shifting!"),
+            App(e1, es) =>
+                self.alloc(App(self.shift(e1, depth, locals, env_map),
+                               self.arena.alloc_slice_r(es.iter().map(|e| self.shift(e, depth, locals, env_map))))),
+            Unbox(e) =>
+                self.alloc(Unbox(self.shift(e, depth, locals, env_map))),
+            Box(Some(ref used), e) => {
+                let new_depth = depth + locals;
+                let ep = self.shift(e, new_depth, 0, &mk_env(&used));
+                let used_remapped = used.iter().map(|&i| remap_var(env_map, locals, i)).collect();
+                self.alloc(Box(Some(used_remapped), ep))
+            },
+            Box(None, _) =>
+                panic!("must annotate before shifting!"),
+            Lob(Some(ref used), e) => {
+                let new_depth = depth + locals;
+                let ep = self.shift(e, new_depth, 1, &mk_env(&used));
+                let used_remapped = used.iter().map(|&i| remap_var(env_map, locals, i)).collect();
+                self.alloc(Lob(Some(used_remapped), ep))
+            },
+            Lob(None, _) =>
+                panic!("must annotate before shifting!"),
+            LetIn(e1, e2) => {
+                let e1p = self.shift(e1, depth, locals, env_map);
+                let e2p = self.shift(e2, depth, locals + 1, env_map);
+                self.alloc(LetIn(e1p, e2p))
+            },
+            Case(e0, e1, e2) => {
+                let e0p = self.shift(e0, depth, locals, env_map);
+                let e1p = self.shift(e1, depth, locals + 1, env_map);
+                let e2p = self.shift(e2, depth, locals + 1, env_map);
+                self.alloc(Case(e0p, e1p, e2p))
+            },
+            Con(con, es) =>
+                self.alloc(Con(con, self.arena.alloc_slice_r(es.iter().map(|e| self.shift(e, depth, locals, env_map))))),
+            Op(op, es) =>
+                self.alloc(Op(op, self.arena.alloc_slice_r(es.iter().map(|e| self.shift(e, depth, locals, env_map))))),
+            Delay(Some(ref used), e) => {
+                let new_depth = depth + locals;
+                let ep = self.shift(e, new_depth, 0, &mk_env(&used));
+                let used_remapped = used.iter().map(|&i| remap_var(env_map, locals, i)).collect();
+                self.alloc(Delay(Some(used_remapped), ep))
+            },
+            Delay(None, _) =>
+               panic!("must annotate before shifting!"),
+            Adv(e) =>
+                self.alloc(Adv(self.shift(e, depth, locals, env_map))),
         }
     }
 }

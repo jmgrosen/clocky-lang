@@ -17,6 +17,7 @@ tree-sitter-clocky = { path = "tree-sitter-clocky" }
 typed-arena = "2.0.2"
 num = "0.4"
 indenter = "0.3"
+imbl = "2.0.3"
 
 [profile.release]
 debug = true
