@@ -16,17 +16,17 @@ impl fmt::Debug for DebruijnIndex {
 }
 
 impl DebruijnIndex {
-    const HERE: DebruijnIndex = DebruijnIndex(0);
+    pub const HERE: DebruijnIndex = DebruijnIndex(0);
 
-    fn shifted(self) -> DebruijnIndex {
+    pub fn shifted(self) -> DebruijnIndex {
         DebruijnIndex(self.0 + 1)
     }
 
-    fn shifted_by(self, by: u32) -> DebruijnIndex {
+    pub fn shifted_by(self, by: u32) -> DebruijnIndex {
         DebruijnIndex(self.0 + by)
     }
 
-    fn shifted_by_signed(self, by: i32) -> DebruijnIndex {
+    pub fn shifted_by_signed(self, by: i32) -> DebruijnIndex {
         if let Some(new) = self.0.checked_add_signed(by) {
             DebruijnIndex(new)
         } else {
@@ -34,7 +34,7 @@ impl DebruijnIndex {
         }
     }
 
-    fn is_within(&self, depth: u32) -> bool {
+    pub fn is_within(&self, depth: u32) -> bool {
         self.0 < depth
     }
 }
@@ -94,7 +94,8 @@ pub enum Op {
     Proj(u32),
     UnGen,
     Force,
-    AllocAndFill
+    AllocAndFill,
+    BuildClosure(Global),
 }
 
 impl Op {
@@ -112,6 +113,7 @@ impl Op {
             Op::UnGen => Some(1),
             Op::Force => Some(1),
             Op::AllocAndFill => None,
+            Op::BuildClosure(_) => None,
         }
     }
 }
@@ -132,7 +134,7 @@ pub enum Expr<'a> {
     Box(Option<VarsUsed>, &'a Expr<'a>),
     Lob(Option<VarsUsed>, &'a Expr<'a>),
     LetIn(&'a Expr<'a>, &'a Expr<'a>),
-    Case(&'a Expr<'a>, &'a Expr<'a>, &'a Expr<'a>),
+    If(&'a Expr<'a>, &'a Expr<'a>, &'a Expr<'a>),
     Con(Con, &'a [&'a Expr<'a>]),
     Op(Op, &'a [&'a Expr<'a>]),
     // These two are initially treated separately from Force and
@@ -187,10 +189,10 @@ impl<'a> Expr<'a> {
                 arena.alloc(e1.shifted_by(by, depth, arena)),
                 arena.alloc(e2.shifted_by(by, depth + 1, arena))
             ),
-            Case(e0, e1, e2) => Case(
+            If(e0, e1, e2) => If(
                 arena.alloc(e0.shifted_by(by, depth, arena)),
-                arena.alloc(e1.shifted_by(by, depth + 1, arena)),
-                arena.alloc(e2.shifted_by(by, depth + 1, arena))
+                arena.alloc(e1.shifted_by(by, depth, arena)),
+                arena.alloc(e2.shifted_by(by, depth, arena))
             ),
             Con(con, es) => Con(con, arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by(by, depth, arena))))),
             Op(op, es) => Op(op, arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by(by, depth, arena))))),
@@ -217,10 +219,10 @@ impl<'a> Expr<'a> {
                 arena.alloc(e1.shifted_by_signed(by, depth, arena)),
                 arena.alloc(e2.shifted_by_signed(by, depth + 1, arena))
             ),
-            Case(e0, e1, e2) => Case(
+            If(e0, e1, e2) => If(
                 arena.alloc(e0.shifted_by_signed(by, depth, arena)),
-                arena.alloc(e1.shifted_by_signed(by, depth + 1, arena)),
-                arena.alloc(e2.shifted_by_signed(by, depth + 1, arena))
+                arena.alloc(e1.shifted_by_signed(by, depth, arena)),
+                arena.alloc(e2.shifted_by_signed(by, depth, arena))
             ),
             Con(con, es) => Con(con, arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by_signed(by, depth, arena))))),
             Op(op, es) => Op(op, arena.alloc_slice_r(es.iter().map(|e| arena.alloc(e.shifted_by_signed(by, depth, arena))))),
@@ -350,11 +352,23 @@ impl<'a> Translator<'a> {
             },
             HExpr::Case(_, e0, x1, e1, x2, e2) => {
                 let e0t = self.translate(ctx.clone(), e0);
-                let new_ctx1 = Rc::new(Ctx::Var(x1, ctx.clone()));
+                let new_ctx = Rc::new(Ctx::Silent(ctx));
+                let new_ctx1 = Rc::new(Ctx::Var(x1, new_ctx.clone()));
                 let e1t = self.translate(new_ctx1, e1);
-                let new_ctx2 = Rc::new(Ctx::Var(x2, ctx));
+                let new_ctx2 = Rc::new(Ctx::Var(x2, new_ctx));
                 let e2t = self.translate(new_ctx2, e2);
-                Expr::Case(self.alloc(e0t), self.alloc(e1t), self.alloc(e2t))
+                // TODO: should really make this the same abstraction level as InL/InR...
+                Expr::LetIn(
+                    self.alloc(e0t),
+                    self.alloc(Expr::LetIn(
+                        self.alloc(Expr::Op(Op::Proj(1), self.alloc_slice([self.alloc(Expr::Var(DebruijnIndex::HERE))]))),
+                        self.alloc(Expr::If(
+                            self.alloc(Expr::Op(Op::Proj(0), self.alloc_slice([self.alloc(Expr::Var(DebruijnIndex::HERE.shifted()))]))),
+                            self.alloc(e1t),
+                            self.alloc(e2t)
+                        ))
+                    ))
+                )
             },
             HExpr::Array(_, ref es) => {
                 let est = es.iter().map(|&e| self.alloc(self.translate(ctx.clone(), e)));
@@ -471,21 +485,21 @@ impl<'a> Translator<'a> {
                 } else {
                     None
                 },
-            Case(e0, e1, e2) =>
+            If(e0, e1, e2) =>
                 if let Some(abs) = self.abstract_adv(rew, depth, e0) {
-                    Some(abs.map(|e0p| self.alloc(Case(
+                    Some(abs.map(|e0p| self.alloc(If(
                         e0p,
                         self.alloc(e1.shifted_by(1, 0, self.arena)),
                         self.alloc(e2.shifted_by(1, 0, self.arena))
                     ))))
-                } else if let Some(abs) = self.abstract_adv(rew, depth + 1, e1) {
-                    Some(abs.map(|e1p| self.alloc(Case(
+                } else if let Some(abs) = self.abstract_adv(rew, depth, e1) {
+                    Some(abs.map(|e1p| self.alloc(If(
                         self.alloc(e0.shifted_by(1, 0, self.arena)),
                         e1p,
                         self.alloc(e2.shifted_by(1, 0, self.arena))
                     ))))
-                } else if let Some(abs) = self.abstract_adv(rew, depth + 1, e2) {
-                    Some(abs.map(|e2p| self.alloc(Case(
+                } else if let Some(abs) = self.abstract_adv(rew, depth, e2) {
+                    Some(abs.map(|e2p| self.alloc(If(
                         self.alloc(e0.shifted_by(1, 0, self.arena)),
                         self.alloc(e1.shifted_by(1, 0, self.arena)),
                         e2p
@@ -571,7 +585,7 @@ impl<'a> Translator<'a> {
             Box(ref vars, e) => self.alloc(Box(vars.clone(), self.rewrite(e))),
             Lob(ref vars, e) => self.alloc(Lob(vars.clone(), self.rewrite(e))),
             LetIn(e1, e2) => self.alloc(LetIn(self.rewrite(e1), self.rewrite(e2))),
-            Case(e0, e1, e2) => self.alloc(Case(self.rewrite(e0), self.rewrite(e1), self.rewrite(e2))),
+            If(e0, e1, e2) => self.alloc(If(self.rewrite(e0), self.rewrite(e1), self.rewrite(e2))),
             Con(con, es) => self.alloc(Con(con, self.slice_rewrite(es))),
             Op(op, es) => self.alloc(Op(op, self.slice_rewrite(es))),
             Delay(ref vars, e) => {
@@ -687,11 +701,11 @@ impl<'a> Translator<'a> {
                 let (e2p, vs2) = self.annotate_used_vars(e2);
                 (self.alloc(LetIn(e1p, e2p)), VarSetThunk::Union(vs1.into(), VarSetThunk::Shift(1, vs2.into()).into()))
             },
-            Case(e0, e1, e2) => {
+            If(e0, e1, e2) => {
                 let (e0p, vs0) = self.annotate_used_vars(e0);
                 let (e1p, vs1) = self.annotate_used_vars(e1);
                 let (e2p, vs2) = self.annotate_used_vars(e2);
-                (self.alloc(Case(e0p, e1p, e2p)), VarSetThunk::Union(vs0.into(), VarSetThunk::Shift(1, VarSetThunk::Union(vs1.into(), vs2.into()).into()).into()))
+                (self.alloc(If(e0p, e1p, e2p)), VarSetThunk::Union(vs0.into(), VarSetThunk::Union(vs1.into(), vs2.into()).into()))
             },
             Con(con, es) => {
                 let mut vss = Rc::new(VarSetThunk::Empty);
@@ -767,11 +781,11 @@ impl<'a> Translator<'a> {
                 let e2p = self.shift(e2, depth, locals + 1, env_map);
                 self.alloc(LetIn(e1p, e2p))
             },
-            Case(e0, e1, e2) => {
+            If(e0, e1, e2) => {
                 let e0p = self.shift(e0, depth, locals, env_map);
-                let e1p = self.shift(e1, depth, locals + 1, env_map);
-                let e2p = self.shift(e2, depth, locals + 1, env_map);
-                self.alloc(Case(e0p, e1p, e2p))
+                let e1p = self.shift(e1, depth, locals, env_map);
+                let e2p = self.shift(e2, depth, locals, env_map);
+                self.alloc(If(e0p, e1p, e2p))
             },
             Con(con, es) =>
                 self.alloc(Con(con, self.arena.alloc_slice_r(es.iter().map(|e| self.shift(e, depth, locals, env_map))))),
