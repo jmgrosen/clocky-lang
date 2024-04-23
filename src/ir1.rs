@@ -1,11 +1,9 @@
-use std::{rc::Rc, collections::{HashMap, HashSet}, mem::MaybeUninit, fmt};
-
-use typed_arena::Arena;
+use std::{rc::Rc, collections::{HashMap, HashSet}, fmt};
 
 use imbl as im;
 
 use crate::expr::{Expr as HExpr, Symbol, Value as HValue};
-// use crate::util::parenthesize;
+use crate::util::ArenaPlus;
 
 // okay, for real, what am i really getting here over just using u32...
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -168,101 +166,10 @@ impl<'a> fmt::Display for Expr<'a> {
 }
 */
 
-pub struct ExprArena<'a> {
-    pub arena: &'a Arena<Expr<'a>>,
-    pub ptr_arena: &'a Arena<&'a Expr<'a>>,
-}
 
-impl<'a> ExprArena<'a> {
-    fn alloc(&self, e: Expr<'a>) -> &'a Expr<'a> {
-        self.arena.alloc(e)
-    }
-
-    fn alloc_slice(&self, it: impl IntoIterator<Item=&'a Expr<'a>>) -> &'a [&'a Expr<'a>] {
-        self.ptr_arena.alloc_extend(it)
-    }
-
-    /// A form of alloc_slice that is reentrant: you can use the arena
-    /// in the iterator. It requires the iterator to return a correct
-    /// upper bound size hint.
-    fn alloc_slice_r(&self, it: impl IntoIterator<Item=&'a Expr<'a>>) -> &'a [&'a Expr<'a>] {
-        // TODO: is this safe? my gut says, "not technically but
-        // probably fine in practice." this will end up with
-        // uninitialized references within ptr_arena, which rust
-        // sounds like it *really* does not like, but it's
-        // prooooooobably fine, right? perhaps this could be fixed by
-        // changing ptr_arena to instead allocate MaybeUninit<&'a
-        // Expr<'a>>?
-        let it = it.into_iter();
-        let (_, Some(bound)) = it.size_hint() else {
-            panic!("alloc_slice_r called with iterator that does not return an upper bound")
-        };
-
-        unsafe {
-            let uninit = self.ptr_arena.alloc_uninitialized(bound);
-            // don't use .enumerate() bc we need the count afterwards
-            let mut i = 0;
-            for e in it {
-                uninit[i].write(e);
-                i += 1;
-            }
-
-            let valid_portion = &uninit[..i];
-            &*(valid_portion as *const [MaybeUninit<&'a Expr<'a>>] as *const [&'a Expr<'a>])
-        }
-    }
-
-    fn alloc_slice_alloc(&self, it: impl IntoIterator<Item=Expr<'a>>) -> &'a [&'a Expr<'a>] {
-        self.alloc_slice(it.into_iter().map(|e| self.alloc(e)))
-    }
-
-    fn alloc_slice_maybe(&self, it: impl IntoIterator<Item=Option<&'a Expr<'a>>>) -> Option<&'a [&'a Expr<'a>]> {
-        let mut success = true;
-        let slice = self.ptr_arena.alloc_extend(it.into_iter().map_while(|e| { success = e.is_some(); e }));
-        if success { Some(slice) } else { None }
-    }
-
-    /// A form of alloc_slice that is reentrant: you can use the arena
-    /// in the iterator. It requires the iterator to return a correct
-    /// upper bound size hint.
-    fn alloc_slice_maybe_r(&self, it: impl IntoIterator<Item=Option<&'a Expr<'a>>>) -> Option<&'a [&'a Expr<'a>]> {
-        // TODO: is this safe? my gut says, "not technically but
-        // probably fine in practice." this will end up with
-        // uninitialized references within ptr_arena, which rust
-        // sounds like it *really* does not like, but it's
-        // prooooooobably fine, right? perhaps this could be fixed by
-        // changing ptr_arena to instead allocate MaybeUninit<&'a
-        // Expr<'a>>?
-        let it = it.into_iter();
-        let (_, Some(bound)) = it.size_hint() else {
-            panic!("alloc_slice_r called with iterator that does not return an upper bound")
-        };
-
-        unsafe {
-            let uninit = self.ptr_arena.alloc_uninitialized(bound);
-            // don't use .enumerate() bc we need the count afterwards
-            let mut i = 0;
-            for oe in it {
-                if let Some(e) = oe {
-                    uninit[i].write(e);
-                    i += 1;
-                } else {
-                    return None;
-                }
-            }
-
-            let valid_portion = &uninit[..i];
-            Some(&*(valid_portion as *const [MaybeUninit<&'a Expr<'a>>] as *const [&'a Expr<'a>]))
-        }
-    }
-
-    fn alloc_slice_maybe_alloc(&self, it: impl IntoIterator<Item=Option<Expr<'a>>>) -> Option<&'a [&'a Expr<'a>]> {
-        self.alloc_slice_maybe(it.into_iter().map(|oe| oe.map(|e| self.alloc(e))))
-    }
-}
 
 impl<'a> Expr<'a> {
-    fn shifted_by<'b>(&self, by: u32, depth: u32, arena: &'b ExprArena<'b>) -> Expr<'b> {
+    fn shifted_by<'b>(&self, by: u32, depth: u32, arena: &'b ArenaPlus<'b, Expr<'b>>) -> Expr<'b> {
         use Expr::*;
         match *self {
             Var(i) => if i.is_within(depth) { Var(i) } else { Var(i.shifted_by(by)) },
@@ -292,7 +199,7 @@ impl<'a> Expr<'a> {
         }
     }
 
-    fn shifted_by_signed<'b>(&self, by: i32, depth: u32, arena: &'b ExprArena<'b>) -> Expr<'b> {
+    fn shifted_by_signed<'b>(&self, by: i32, depth: u32, arena: &'b ArenaPlus<'b, Expr<'b>>) -> Expr<'b> {
         use Expr::*;
         match *self {
             Var(i) => if i.is_within(depth) { Var(i) } else { Var(i.shifted_by_signed(by)) },
@@ -324,9 +231,10 @@ impl<'a> Expr<'a> {
 }
             
 
+
 pub struct Translator<'a> {
     pub builtins: HashMap<Symbol, Global>,
-    pub arena: &'a ExprArena<'a>,
+    pub arena: &'a ArenaPlus<'a, Expr<'a>>,
 }
 
 pub enum Ctx {
@@ -502,7 +410,7 @@ impl RewriteType {
         }
     }
 
-    fn abstract_term<'a>(&self, subterm: &'a Expr<'a>, hole_depth: u32, arena: &'a ExprArena<'a>) -> Abstracted<'a, Expr<'a>> {
+    fn abstract_term<'a>(&self, subterm: &'a Expr<'a>, hole_depth: u32, arena: &'a ArenaPlus<'a, Expr<'a>>) -> Abstracted<'a, Expr<'a>> {
         use RewriteType::*;
         match *self {
             WithinDelay => Abstracted {

@@ -20,6 +20,7 @@ mod interp;
 mod typing;
 mod ir0;
 mod ir1;
+mod ir2;
 mod util;
 
 use builtin::make_builtins;
@@ -327,7 +328,7 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
 
     let expr_under_arena = Arena::new();
     let expr_ptr_arena = Arena::new();
-    let expr_arena = ir1::ExprArena { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
+    let expr_arena = util::ArenaPlus { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
     let translator = ir1::Translator { builtins: builtin_globals, arena: &expr_arena };
 
     // TODO: compile everything, ofc
