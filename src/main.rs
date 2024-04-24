@@ -319,42 +319,54 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
     let arena = Arena::new();
     let defs: HashMap<Symbol, &Expr<'_, ()>> = parsed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
 
+    let builtins = make_builtins(&mut toplevel.interner);
     let mut builtin_globals = HashMap::new();
-    builtin_globals.insert(toplevel.interner.get_or_intern_static("add"), ir1::Global(0));
-    builtin_globals.insert(toplevel.interner.get_or_intern_static("div"), ir1::Global(1));
-    builtin_globals.insert(toplevel.interner.get_or_intern_static("mul"), ir1::Global(2));
-    builtin_globals.insert(toplevel.interner.get_or_intern_static("pi"), ir1::Global(3));
-    builtin_globals.insert(toplevel.interner.get_or_intern_static("sin"), ir1::Global(4));
+    let mut global_defs = Vec::new();
+    for (name, builtin) in builtins.into_iter() {
+        builtin_globals.insert(name, ir1::Global(global_defs.len() as u32));
+        global_defs.push(ir2::GlobalDef::Func {
+            rec: false,
+            arity: builtin.n_args as u32,
+            env_size: 0,
+            body: builtin.ir2_expr,
+        });
+    }
+
+    for &name in defs.keys() {
+        builtin_globals.insert(name, ir1::Global(global_defs.len() as u32));
+        // push a dummy def that we'll replace later, to reserve the space
+        global_defs.push(ir2::GlobalDef::ClosedExpr {
+            body: &ir2::Expr::Var(ir1::DebruijnIndex(0)),
+        });
+    }
 
     let expr_under_arena = Arena::new();
     let expr_ptr_arena = Arena::new();
     let expr_arena = util::ArenaPlus { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
     let translator = ir1::Translator { builtins: builtin_globals, arena: &expr_arena };
 
-    // TODO: compile everything, ofc
-    let main = *defs.get(&parsed_file.defs.last().unwrap().name).unwrap();
-    let expr_ir = translator.translate(std::rc::Rc::new(ir1::Ctx::Empty), main);
-    println!("{expr_ir:?}\n");
-
-    // let rewritten = translator.rewrite(&expr_ir);
-    // println!("{rewritten:?}");
-
-    let (annotated, _) = translator.annotate_used_vars(&expr_ir);
-    println!("{:?}\n", annotated);
-
-    let shifted = translator.shift(annotated, 0, 0, &imbl::HashMap::new());
-    println!("{:?}\n", shifted);
+    
+    // TODO: compile everything, ofc <----- !!!!!
+    let defs_ir1: HashMap<Symbol, &ir1::Expr<'_>> = defs.iter().map(|(&name, expr)| {
+        let expr_ir1 = expr_under_arena.alloc(translator.translate(ir1::Ctx::Empty.into(), *expr));
+        let (annotated, _) = translator.annotate_used_vars(expr_ir1);
+        let shifted = translator.shift(annotated, 0, 0, &imbl::HashMap::new());
+        (name, shifted)
+    }).collect();
 
     let expr2_under_arena = Arena::new();
     let expr2_ptr_arena = Arena::new();
     let expr2_arena = util::ArenaPlus { arena: &expr2_under_arena, ptr_arena: &expr2_ptr_arena };
-    let mut translator2 = ir2::Translator { arena: &expr2_arena, funcs: Vec::new() };
+    let mut translator2 = ir2::Translator { arena: &expr2_arena, globals: global_defs };
 
-    let translated2 = translator2.translate(shifted);
-    println!("{:?}\n", translated2);
+    let defs_ir2: HashMap<Symbol, &ir2::Expr<'_>> = defs_ir1.iter().map(|(&name, expr)| {
+        let expr_ir2 = translator2.translate(expr);
+        translator2.globals[translator.builtins[&name].0 as usize] = ir2::GlobalDef::ClosedExpr { body: expr_ir2 };
+        (name, expr_ir2)
+    }).collect();
 
-    for (i, func) in translator2.funcs.iter().enumerate() {
-        println!("func {i}: {func:?}");
+    for (i, func) in translator2.globals.iter().enumerate() {
+        println!("global {i}: {func:?}");
     }
 
     Ok(())

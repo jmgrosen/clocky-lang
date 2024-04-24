@@ -7,7 +7,7 @@ use crate::util::ArenaPlus;
 
 // okay, for real, what am i really getting here over just using u32...
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DebruijnIndex(u32);
+pub struct DebruijnIndex(pub u32);
 
 impl fmt::Debug for DebruijnIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -18,11 +18,11 @@ impl fmt::Debug for DebruijnIndex {
 impl DebruijnIndex {
     pub const HERE: DebruijnIndex = DebruijnIndex(0);
 
-    pub fn shifted(self) -> DebruijnIndex {
+    pub const fn shifted(self) -> DebruijnIndex {
         DebruijnIndex(self.0 + 1)
     }
 
-    pub fn shifted_by(self, by: u32) -> DebruijnIndex {
+    pub const fn shifted_by(self, by: u32) -> DebruijnIndex {
         DebruijnIndex(self.0 + by)
     }
 
@@ -34,7 +34,7 @@ impl DebruijnIndex {
         }
     }
 
-    pub fn is_within(&self, depth: u32) -> bool {
+    pub const fn is_within(&self, depth: u32) -> bool {
         self.0 < depth
     }
 }

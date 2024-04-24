@@ -14,16 +14,21 @@ pub enum Expr<'a> {
 }
 
 #[derive(Debug)]
-pub struct Func<'a> {
-    rec: bool,
-    arity: u32,
-    env_size: u32, // do we need this here?
-    body: &'a Expr<'a>,
+pub enum GlobalDef<'a> {
+    Func {
+        rec: bool,
+        arity: u32,
+        env_size: u32, // do we need this here?
+        body: &'a Expr<'a>,
+    },
+    ClosedExpr {
+        body: &'a Expr<'a>,
+    },
 }
 
 pub struct Translator<'a> {
     pub arena: &'a ArenaPlus<'a, Expr<'a>>,
-    pub funcs: Vec<Func<'a>>,
+    pub globals: Vec<GlobalDef<'a>>,
 }
 
 impl<'a> Translator<'a> {
@@ -34,8 +39,9 @@ impl<'a> Translator<'a> {
                 arena.alloc(Expr::Var(i)),
             HExpr::Val(v) =>
                 arena.alloc(Expr::Op(Op::Const(v), &[])),
-            HExpr::Glob(_) =>
-                panic!("what is a global anyway??"),
+            HExpr::Glob(g) =>
+                // TODO: treat funcs and values/closedexprs differently?
+                self.arena.alloc(Expr::Op(Op::BuildClosure(g), &[])),
             HExpr::Lam(Some(ref used), arity, body) =>
                 self.build_new_closure(false, arity, used, body),
             HExpr::App(e1, es) => {
@@ -84,8 +90,8 @@ impl<'a> Translator<'a> {
 
     fn build_new_closure<'b>(&mut self, rec: bool, arity: u32, used: &[DebruijnIndex], body: &'b HExpr<'b>) -> &'a Expr<'a> {
         let bodyp = self.translate(body);
-        let func_idx = self.funcs.len();
-        self.funcs.push(Func {
+        let func_idx = self.globals.len();
+        self.globals.push(GlobalDef::Func {
             rec,
             arity,
             env_size: used.len() as u32,
