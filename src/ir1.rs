@@ -93,7 +93,6 @@ pub enum Op {
     Pi,
     Proj(u32),
     UnGen,
-    Force,
     AllocAndFill,
     BuildClosure(Global),
 }
@@ -111,7 +110,6 @@ impl Op {
             Op::Pi => Some(0),
             Op::Proj(_) => Some(1),
             Op::UnGen => Some(1),
-            Op::Force => Some(1),
             Op::AllocAndFill => None,
             Op::BuildClosure(_) => None,
         }

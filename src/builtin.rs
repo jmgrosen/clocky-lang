@@ -22,7 +22,7 @@ impl Builtin {
 }
 
 macro_rules! builtins {
-    ( $($name:ident [ $nargs:literal ] { $pat:pat => $e:expr } [ $ir2e:expr ] ),* ) => {
+    ( $($name:ident [ $nargs:literal ] { $pat:pat => $e:expr } [ $ir2e:expr ] ),* $(,)? ) => {
         mod builtins {
             use super::*;
 
@@ -65,7 +65,7 @@ builtins!(
       [ &ir2::Expr::Op(Op::Mul, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
     div[2]
       { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 / s2)) }
-      [ &ir2::Expr::Op(Op::Div, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ]
+      [ &ir2::Expr::Op(Op::Div, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
     // sub[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 - s2)) },
     // mul[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 * s2)) },
     // div[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 / s2)) }

@@ -18,6 +18,8 @@ typed-arena = "2.0.2"
 num = "0.4"
 indenter = "0.3"
 imbl = "2.0.3"
+wasm-encoder = "0.205"
+wasmparser = "0.205"
 
 [profile.release]
 debug = true

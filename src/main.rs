@@ -3,7 +3,7 @@ use std::error::Error;
 use std::path::Path;
 use std::process::ExitCode;
 use std::{collections::HashMap, path::PathBuf, fs::File};
-use std::io::Read;
+use std::io::{Read, Write};
 
 use expr::{Expr, Symbol};
 use num::One;
@@ -22,6 +22,7 @@ mod ir0;
 mod ir1;
 mod ir2;
 mod util;
+mod wasm;
 
 use builtin::make_builtins;
 use interp::get_samples;
@@ -367,6 +368,101 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
 
     for (i, func) in translator2.globals.iter().enumerate() {
         println!("global {i}: {func:?}");
+    }
+
+    let mut wasm_bytes = wasm::translate(&translator2.globals);
+
+    let mut f = File::create("/tmp/foo.wasm")?;
+    f.write_all(&wasm_bytes)?;
+    drop(f);
+
+    //wasmparser::validate(&wasm_bytes).unwrap();
+    use wasmparser::{Chunk, Payload::*};
+    let mut validator = wasmparser::Validator::new();
+    let mut cur = wasmparser::Parser::new(0);
+    let mut eof = false;
+    let mut stack = Vec::new();
+
+    loop {
+        let (payload, consumed) = match cur.parse(&wasm_bytes, eof).unwrap() {
+            Chunk::NeedMoreData(hint) => {
+                break;
+            }
+
+            Chunk::Parsed { consumed, payload } => (payload, consumed),
+        };
+
+        println!("{payload:?}");
+        match validator.payload(&payload).unwrap() {
+            wasmparser::ValidPayload::Func(func, body) => {
+                let mut v = func.into_validator(Default::default());
+                v.validate(&body).unwrap();
+            },
+            _ => {}
+        }
+        match payload {
+            // Sections for WebAssembly modules
+            Version { .. } => { /* ... */ }
+            TypeSection(_) => { /* ... */ }
+            ImportSection(_) => { /* ... */ }
+            FunctionSection(_) => { /* ... */ }
+            TableSection(_) => { /* ... */ }
+            MemorySection(_) => { /* ... */ }
+            TagSection(_) => { /* ... */ }
+            GlobalSection(_) => { /* ... */ }
+            ExportSection(_) => { /* ... */ }
+            StartSection { .. } => { /* ... */ }
+            ElementSection(_) => { /* ... */ }
+            DataCountSection { .. } => { /* ... */ }
+            DataSection(_) => { /* ... */ }
+
+            // Here we know how many functions we'll be receiving as
+            // `CodeSectionEntry`, so we can prepare for that, and
+            // afterwards we can parse and handle each function
+            // individually.
+            CodeSectionStart { .. } => { /* ... */ }
+            CodeSectionEntry(_) => {
+                // here we can iterate over `body` to parse the function
+                // and its locals
+            }
+
+            // Sections for WebAssembly components
+            InstanceSection(_) => { /* ... */ }
+            CoreTypeSection(_) => { /* ... */ }
+            ComponentInstanceSection(_) => { /* ... */ }
+            ComponentAliasSection(_) => { /* ... */ }
+            ComponentTypeSection(_) => { /* ... */ }
+            ComponentCanonicalSection(_) => { /* ... */ }
+            ComponentStartSection { .. } => { /* ... */ }
+            ComponentImportSection(_) => { /* ... */ }
+            ComponentExportSection(_) => { /* ... */ }
+
+            ModuleSection { parser, .. }
+            | ComponentSection { parser, .. } => {
+                stack.push(cur.clone());
+                cur = parser.clone();
+            }
+
+            CustomSection(_) => { /* ... */ }
+
+            // most likely you'd return an error here
+            UnknownSection { .. } => { /* ... */ }
+
+            // Once we've reached the end of a parser we either resume
+            // at the parent parser or we break out of the loop because
+            // we're done.
+            End(_) => {
+                if let Some(parent_parser) = stack.pop() {
+                    cur = parent_parser;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // once we're done processing the payload we can forget the
+        // original.
+        wasm_bytes.drain(..consumed);
     }
 
     Ok(())
