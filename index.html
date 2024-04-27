@@ -8,6 +8,7 @@
       // instance.exports.init();
       
       let stream = instance.exports.main;
+      /*
       let mem_u32 = new Uint32Array(instance.exports.memory.buffer);
       let mem_f32 = new Float32Array(instance.exports.memory.buffer);
       for (let i = 0; i < 5; i++) {
@@ -15,6 +16,12 @@
           console.log(val);
           stream = instance.exports.adv_stream(stream);
       }
+                          */
+      const num_samples = 10000000;
+      const samples_ptr = instance.exports.sample(stream, num_samples);
+      const mem_f32 = new Float32Array(instance.exports.memory.buffer);
+      const samples = mem_f32.slice(samples_ptr/4, samples_ptr/4 + num_samples);
+      console.log(samples);
     </script>
   </head>
   <body>

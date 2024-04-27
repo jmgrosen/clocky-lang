@@ -85,6 +85,86 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
     functions.function(adv_func_type);
     codes.function(&adv_func);
 
+    let mut sample_func = wasm::Function::new_with_locals_types([wasm::ValType::I32, wasm::ValType::I32, wasm::ValType::I32]);
+    let sample_func_type = function_types.for_args(2);
+    sample_func.instruction(&wasm::Instruction::GlobalGet(heap_global));
+    // i32
+    sample_func.instruction(&wasm::Instruction::LocalTee(2));
+    sample_func.instruction(&wasm::Instruction::LocalTee(4));
+    // i32
+    sample_func.instruction(&wasm::Instruction::LocalGet(1));
+    // i32 i32
+    sample_func.instruction(&wasm::Instruction::I32Const(4));
+    // i32 i32 i32
+    sample_func.instruction(&wasm::Instruction::I32Mul);
+    // i32 i32
+    sample_func.instruction(&wasm::Instruction::I32Add);
+    // i32
+    sample_func.instruction(&wasm::Instruction::GlobalSet(heap_global));
+    //
+    sample_func.instruction(&wasm::Instruction::Loop(wasm::BlockType::Empty));
+    //
+    sample_func.instruction(&wasm::Instruction::LocalGet(1));
+    // i32
+    sample_func.instruction(&wasm::Instruction::If(wasm::BlockType::Empty));
+    //
+    // copy the current sample to the buffer
+    sample_func.instruction(&wasm::Instruction::LocalGet(2));
+    // i32
+    sample_func.instruction(&wasm::Instruction::LocalGet(0));
+    // i32 i32
+    sample_func.instruction(&wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+    // i32 i32
+    sample_func.instruction(&wasm::Instruction::F32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+    // i32 f32
+    sample_func.instruction(&wasm::Instruction::F32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+    //
+    sample_func.instruction(&wasm::Instruction::LocalGet(2));
+    // i32
+    sample_func.instruction(&wasm::Instruction::I32Const(4));
+    // i32 i32
+    sample_func.instruction(&wasm::Instruction::I32Add);
+    // i32
+    sample_func.instruction(&wasm::Instruction::LocalSet(2));
+    //
+
+    // compute the stream tail
+    sample_func.instruction(&wasm::Instruction::LocalGet(0));
+    // i32
+    sample_func.instruction(&wasm::Instruction::I32Load(wasm::MemArg { offset: 4, align: 2, memory_index: 0 }));
+    // i32
+    sample_func.instruction(&wasm::Instruction::LocalTee(3));
+    // i32
+    sample_func.instruction(&wasm::Instruction::LocalGet(3));
+    // i32 i32
+    sample_func.instruction(&wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+    // i32 i32
+    sample_func.instruction(&wasm::Instruction::CallIndirect { ty: function_types.for_args(1), table: 0 });
+    // i32
+    sample_func.instruction(&wasm::Instruction::LocalSet(0));
+    //
+    
+    // decrement number of samples remaining
+    sample_func.instruction(&wasm::Instruction::LocalGet(1));
+    // i32
+    sample_func.instruction(&wasm::Instruction::I32Const(1));
+    // i32 i32
+    sample_func.instruction(&wasm::Instruction::I32Sub);
+    // i32
+    sample_func.instruction(&wasm::Instruction::LocalSet(1));
+    //
+
+    sample_func.instruction(&wasm::Instruction::Br(1));
+    sample_func.instruction(&wasm::Instruction::End);
+    sample_func.instruction(&wasm::Instruction::End);
+
+    sample_func.instruction(&wasm::Instruction::LocalGet(4));
+    sample_func.instruction(&wasm::Instruction::End);
+
+    exports.export("sample", wasm::ExportKind::Func, functions.len());
+    functions.function(sample_func_type);
+    codes.function(&sample_func);
+
     let mut hd_func = wasm::Function::new_with_locals_types([]);
     let hd_func_type = function_types.types.len() as u32;
     hd_func.instruction(&wasm::Instruction::LocalGet(0));
@@ -111,7 +191,7 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
 
     let mut memories = wasm::MemorySection::new();
     memories.memory(wasm::MemoryType {
-        minimum: 1 << 16,
+        minimum: 1 << 15,
         maximum: None,
         memory64: false,
         shared: false,
