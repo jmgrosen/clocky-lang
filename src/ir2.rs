@@ -1,5 +1,3 @@
-use std::iter;
-
 use crate::ir1::{DebruijnIndex, Expr as HExpr, Op, Global, Con, Value};
 use crate::util::ArenaPlus;
 
@@ -41,7 +39,7 @@ impl<'a> Translator<'a> {
                 arena.alloc(Expr::Op(Op::Const(v), &[])),
             HExpr::Glob(g) =>
                 // TODO: treat funcs and values/closedexprs differently?
-                self.arena.alloc(Expr::Op(Op::BuildClosure(g), &[])),
+                self.arena.alloc(Expr::Op(Op::LoadGlobal(g), &[])),
             HExpr::Lam(Some(ref used), arity, body) =>
                 self.build_new_closure(false, arity, used, body),
             HExpr::App(e1, es) => {
@@ -55,8 +53,23 @@ impl<'a> Translator<'a> {
                 arena.alloc(Expr::CallIndirect(self.translate(e), &[])),
             HExpr::Box(Some(ref used), e) =>
                 self.build_new_closure(false, 0, used, e),
-            HExpr::Lob(Some(ref used), e) =>
-                self.build_new_closure(true, 0, used, e),
+            HExpr::Lob(Some(ref used), e) => {
+                // this is real weird
+                let inner_used: Vec<DebruijnIndex> = (0..=used.len() as u32).map(DebruijnIndex).collect();
+                let inner_closure = self.build_new_closure(false, 0, &inner_used, e);
+                let closure_builder = self.build_new_closure_inner(true, 0, used, inner_closure);
+                arena.alloc(Expr::Let(
+                    // ... what.
+                    arena.alloc_slice([closure_builder]),
+                    arena.alloc(Expr::CallIndirect(
+                        arena.alloc(Expr::CallIndirect(
+                            arena.alloc(Expr::Var(DebruijnIndex(0))),
+                            &[]
+                        )),
+                        &[]
+                    ))
+                ))
+            },
             HExpr::LetIn(e1, e2) => {
                 let e1t = self.translate(e1);
                 let e2t = self.translate(e2);
@@ -90,12 +103,16 @@ impl<'a> Translator<'a> {
 
     fn build_new_closure<'b>(&mut self, rec: bool, arity: u32, used: &[DebruijnIndex], body: &'b HExpr<'b>) -> &'a Expr<'a> {
         let bodyp = self.translate(body);
+        self.build_new_closure_inner(rec, arity, used, bodyp)
+    }
+
+    fn build_new_closure_inner<'b>(&mut self, rec: bool, arity: u32, used: &[DebruijnIndex], body: &'a Expr<'a>) -> &'a Expr<'a> {
         let func_idx = self.globals.len();
         self.globals.push(GlobalDef::Func {
             rec,
             arity,
             env_size: used.len() as u32,
-            body: bodyp,
+            body,
         });
         let closure_env_args = self.arena.alloc_slice_r(used.iter().map(|&i| self.arena.alloc(Expr::Var(i))));
         self.arena.alloc(Expr::Op(Op::BuildClosure(Global(func_idx as u32)), closure_env_args))

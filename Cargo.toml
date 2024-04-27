@@ -20,6 +20,7 @@ indenter = "0.3"
 imbl = "2.0.3"
 wasm-encoder = "0.205"
 wasmparser = "0.205"
+wasmtime = "20.0"
 
 [profile.release]
 debug = true

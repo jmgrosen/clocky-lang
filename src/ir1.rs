@@ -95,6 +95,7 @@ pub enum Op {
     UnGen,
     AllocAndFill,
     BuildClosure(Global),
+    LoadGlobal(Global),
 }
 
 impl Op {
@@ -112,6 +113,7 @@ impl Op {
             Op::UnGen => Some(1),
             Op::AllocAndFill => None,
             Op::BuildClosure(_) => None,
+            Op::LoadGlobal(_) => Some(0),
         }
     }
 }
@@ -233,7 +235,7 @@ impl<'a> Expr<'a> {
 
 
 pub struct Translator<'a> {
-    pub builtins: HashMap<Symbol, Global>,
+    pub globals: HashMap<Symbol, Global>,
     pub arena: &'a ArenaPlus<'a, Expr<'a>>,
 }
 
@@ -272,7 +274,7 @@ impl<'a> Translator<'a> {
             HExpr::Var(_, x) =>
                 if let Some(idx) = ctx.lookup(x) {
                     Expr::Var(idx)
-                } else if let Some(&glob) = self.builtins.get(&x) {
+                } else if let Some(&glob) = self.globals.get(&x) {
                     Expr::Glob(glob)
                 } else {
                     panic!("couldn't find a variable??")

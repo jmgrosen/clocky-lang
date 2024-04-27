@@ -1,0 +1,1 @@
+def main: for k : clock. ~^(k) sample = &^(k) s. 42.0 :: `!(unbox s)

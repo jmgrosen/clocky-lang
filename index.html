@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script type="module">
+      let instance = (await WebAssembly.instantiateStreaming(fetch("test.wasm"), {})).instance;
+
+      // is this not being run automatically?
+      // instance.exports.init();
+      
+      let stream = instance.exports.main;
+      let mem_u32 = new Uint32Array(instance.exports.memory.buffer);
+      let mem_f32 = new Float32Array(instance.exports.memory.buffer);
+      for (let i = 0; i < 5; i++) {
+          let val = instance.exports.hd_stream(stream);
+          console.log(val);
+          stream = instance.exports.adv_stream(stream);
+      }
+    </script>
+  </head>
+  <body>
+  </body>
+</html>

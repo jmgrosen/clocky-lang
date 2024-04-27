@@ -75,6 +75,10 @@ enum Command {
     Compile {
         /// Code file to use
         file: Option<PathBuf>,
+
+        /// Path to wasm module file to be written
+        #[arg(short='o')]
+        out: Option<PathBuf>,
     },
 }
 
@@ -85,6 +89,15 @@ fn read_file(name: Option<&Path>) -> std::io::Result<String> {
         None => { std::io::stdin().read_to_string(&mut s)?; }
     }
     Ok(s)
+}
+
+fn write_file(name: Option<&Path>, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(path) = name {
+        File::create(path)?.write_all(bytes)
+    } else {
+        // for now, just don't write it. eventually write to stdout
+        Ok(())
+    }
 }
 
 struct TopLevel<'a> {
@@ -309,7 +322,7 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, length: us
     Ok(())
 }
 
-fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
+fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
     let parsed_file = match toplevel.make_parser().parse_file(&code) {
         Ok(parsed_file) => parsed_file,
@@ -318,7 +331,7 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
     toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
 
     let arena = Arena::new();
-    let defs: HashMap<Symbol, &Expr<'_, ()>> = parsed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
+    let defs: Vec<(Symbol, &Expr<'_, ()>)> = parsed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
 
     let builtins = make_builtins(&mut toplevel.interner);
     let mut builtin_globals = HashMap::new();
@@ -333,7 +346,7 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
         });
     }
 
-    for &name in defs.keys() {
+    for &(name, _) in defs.iter() {
         builtin_globals.insert(name, ir1::Global(global_defs.len() as u32));
         // push a dummy def that we'll replace later, to reserve the space
         global_defs.push(ir2::GlobalDef::ClosedExpr {
@@ -344,12 +357,12 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
     let expr_under_arena = Arena::new();
     let expr_ptr_arena = Arena::new();
     let expr_arena = util::ArenaPlus { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
-    let translator = ir1::Translator { builtins: builtin_globals, arena: &expr_arena };
+    let translator = ir1::Translator { globals: builtin_globals, arena: &expr_arena };
 
     
-    // TODO: compile everything, ofc <----- !!!!!
-    let defs_ir1: HashMap<Symbol, &ir1::Expr<'_>> = defs.iter().map(|(&name, expr)| {
-        let expr_ir1 = expr_under_arena.alloc(translator.translate(ir1::Ctx::Empty.into(), *expr));
+    let mut main = None;
+    let defs_ir1: HashMap<Symbol, &ir1::Expr<'_>> = defs.iter().map(|&(name, expr)| {
+        let expr_ir1 = expr_under_arena.alloc(translator.translate(ir1::Ctx::Empty.into(), expr));
         let (annotated, _) = translator.annotate_used_vars(expr_ir1);
         let shifted = translator.shift(annotated, 0, 0, &imbl::HashMap::new());
         (name, shifted)
@@ -362,7 +375,12 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
 
     let defs_ir2: HashMap<Symbol, &ir2::Expr<'_>> = defs_ir1.iter().map(|(&name, expr)| {
         let expr_ir2 = translator2.translate(expr);
-        translator2.globals[translator.builtins[&name].0 as usize] = ir2::GlobalDef::ClosedExpr { body: expr_ir2 };
+        let def_idx = translator.globals[&name].0 as usize;
+        if name == toplevel.interner.get_or_intern_static("main") {
+            println!("found main: {def_idx}");
+            main = Some(def_idx);
+        }
+        translator2.globals[def_idx] = ir2::GlobalDef::ClosedExpr { body: expr_ir2 };
         (name, expr_ir2)
     }).collect();
 
@@ -370,11 +388,10 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
         println!("global {i}: {func:?}");
     }
 
-    let mut wasm_bytes = wasm::translate(&translator2.globals);
+    let mut wasm_bytes = wasm::translate(&translator2.globals, main.unwrap());
+    let orig_wasm_bytes = wasm_bytes.clone();
 
-    let mut f = File::create("/tmp/foo.wasm")?;
-    f.write_all(&wasm_bytes)?;
-    drop(f);
+    write_file(out.as_deref(), &wasm_bytes)?;
 
     //wasmparser::validate(&wasm_bytes).unwrap();
     use wasmparser::{Chunk, Payload::*};
@@ -465,7 +482,27 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLev
         wasm_bytes.drain(..consumed);
     }
 
+    run(&orig_wasm_bytes);
+
     Ok(())
+}
+
+fn run(wasm_mod: &[u8]) {
+    let engine = wasmtime::Engine::default();
+    let module = wasmtime::Module::new(&engine, wasm_mod).unwrap();
+    for export in module.exports() {
+        println!("{export:?}");
+    }
+    let mut linker = wasmtime::Linker::new(&engine);
+    let mut store: wasmtime::Store<()> = wasmtime::Store::new(&engine, ());
+    let instance = linker.instantiate(&mut store, &module).unwrap();
+    /*
+    let main = instance.get_typed_func::<i32, i32>(&mut store, "main").unwrap();
+
+    let res = main.call(&mut store, 0).unwrap();
+    println!("res: {res}");
+     */
+    println!("main: {:?}", instance.get_global(&mut store, "main").unwrap().get(&mut store));
 }
 
 fn main() -> Result<(), ExitCode> {
@@ -480,11 +517,13 @@ fn main() -> Result<(), ExitCode> {
     let mul = interner.get_or_intern_static("mul");
     let pi = interner.get_or_intern_static("pi");
     let sin = interner.get_or_intern_static("sin");
+    let addone = interner.get_or_intern_static("addone");
     globals.insert(add, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
     globals.insert(div, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
     globals.insert(mul, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
     globals.insert(pi, typing::Type::Sample);
     globals.insert(sin, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
+    globals.insert(addone, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
 
     let mut toplevel = TopLevel { arena: &annot_arena, interner, globals };
 
@@ -494,7 +533,7 @@ fn main() -> Result<(), ExitCode> {
         Command::Interpret { file } => cmd_interpret(&mut toplevel, file),
         Command::Repl => cmd_repl(&mut toplevel),
         Command::Sample { out, file, length } => cmd_sample(&mut toplevel, file, length, out),
-        Command::Compile { file } => cmd_compile(&mut toplevel, file),
+        Command::Compile { file, out } => cmd_compile(&mut toplevel, file, out),
     };
 
     match res {
