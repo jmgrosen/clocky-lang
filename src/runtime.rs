@@ -19,6 +19,7 @@ pub struct Runtime<'a> {
     pub code: Vec<Range<usize>>,
     pub data: Vec<wasmparser::Data<'a>>,
     pub globals: Vec<Global>,
+    pub elem: Option<wasmparser::Element<'a>>,
 }
 
 fn valtype_to_valtype(ty: &wasmparser::ValType) -> wasm_encoder::ValType {
@@ -28,7 +29,15 @@ fn valtype_to_valtype(ty: &wasmparser::ValType) -> wasm_encoder::ValType {
         wasmparser::ValType::F32 => wasm_encoder::ValType::F32,
         wasmparser::ValType::F64 => wasm_encoder::ValType::F64,
         wasmparser::ValType::V128 => wasm_encoder::ValType::V128,
-        wasmparser::ValType::Ref(_) => panic!("can't convert reftypes yet >:("),
+        wasmparser::ValType::Ref(r) => wasm_encoder::ValType::Ref(reftype_to_reftype(&r)),
+    }
+}
+
+fn reftype_to_reftype(ty: &wasmparser::RefType) -> wasm::RefType {
+    match *ty {
+        wasmparser::RefType::FUNCREF => wasm::RefType::FUNCREF,
+        wasmparser::RefType::EXTERNREF => wasm::RefType::EXTERNREF,
+        _ => panic!("wasmparser reftype {:?} cannot be converted to wasm_encoder reftype yet", ty),
     }
 }
 
@@ -81,6 +90,8 @@ impl<'a> Runtime<'a> {
         let mut globals = Vec::with_capacity(0);
         let mut exports = HashMap::new();
         let mut data = Vec::with_capacity(0);
+        let mut found_table = false;
+        let mut elem = None;
         for payload in parser.parse_all(buf) {
             match payload.unwrap() {
                 Version { .. } => { }
@@ -98,12 +109,13 @@ impl<'a> Runtime<'a> {
                     // will be especially tricky if we define any
                     // vtables within the runtime itself... which we
                     // surely will if we pull in nontrivial libraries
+                    assert!(!found_table);
                     assert!(table_reader.count() == 1);
                     let table = table_reader.into_iter().next().unwrap().unwrap();
                     assert!(table.ty.element_type == wasmparser::RefType::FUNCREF);
-                    // TODO: is this what we expect? this is just what i found at first.
-                    assert!(table.ty.initial == 1);
-                    assert!(table.ty.maximum == Some(1));
+                    let initial = table.ty.initial;
+                    assert!(initial as usize <= functions.len());
+                    assert!(table.ty.maximum == Some(initial));
                 }
                 MemorySection(mem_reader) => {
                     assert!(mem_reader.count() == 1);
@@ -127,7 +139,10 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 StartSection { .. } => { panic!("runtime should not have start, right?") }
-                ElementSection(_) => { panic!("element section?") }
+                ElementSection(element_reader) => {
+                    assert!(element_reader.count() <= 1);
+                    elem = element_reader.into_iter().next().map(|re| re.unwrap());
+                }
 
                 DataCountSection { count, .. } => {
                     assert!(count == 1);
@@ -160,6 +175,7 @@ impl<'a> Runtime<'a> {
             code,
             data,
             globals,
+            elem,
         }
     }
 
@@ -197,6 +213,33 @@ impl<'a> Runtime<'a> {
     pub fn emit_exports(&self, exports: &mut wasm::ExportSection) {
         for (name, &(k, i)) in self.exports.iter() {
             exports.export(name, exportkind_to_exportkind(k), i);
+        }
+    }
+
+    pub fn emit_elements(&self, elems: &mut wasm::ElementSection) {
+        if let Some(ref elem) = self.elem {
+            if let wasmparser::ElementKind::Active { table_index, offset_expr } = elem.kind {
+                let mut func_idxs = Vec::with_capacity(0);
+                let mut init_exprs = Vec::with_capacity(0);
+                let actual_elems = match elem.items {
+                    wasmparser::ElementItems::Functions(ref funcs) => {
+                        func_idxs = funcs.clone().into_iter().collect::<Result<_, _>>().unwrap();
+                        wasm::Elements::Functions(&func_idxs)
+                    },
+                    wasmparser::ElementItems::Expressions(ref ty, ref exprs) => {
+                        init_exprs = exprs
+                            .clone()
+                            .into_iter()
+                            .map(|re| re.map(|e| constexpr_to_constexpr(&e)))
+                            .collect::<Result<_, _>>()
+                            .unwrap();
+                        wasm::Elements::Expressions(reftype_to_reftype(ty), &init_exprs)
+                    },
+                };
+                elems.active(table_index, &constexpr_to_constexpr(&offset_expr), actual_elems);
+            } else {
+                panic!("only support active element segments in the runtime")
+            }
         }
     }
 }

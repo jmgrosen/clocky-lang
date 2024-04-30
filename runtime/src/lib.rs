@@ -1,5 +1,9 @@
 #![no_std]
 
+use core::arch::wasm32;
+use core::ptr;
+use core::slice;
+
 pub type ClockyFunc = extern "C" fn(*const Closure) -> *const ();
 
 #[repr(C)]
@@ -30,15 +34,15 @@ pub unsafe extern "C" fn adv_stream(s: *const Stream) -> *const Stream {
     ((*tail).func)(tail) as *const Stream
 }
 
-static mut BUF: [f32; 1024] = [0.0; 1024];
-
 #[no_mangle]
-pub unsafe extern "C" fn sample(mut s: *const Stream, _n: u32) -> *const f32 {
-    for i in 0..1024 {
-        BUF[i] = hd_stream(s);
+pub unsafe extern "C" fn sample(mut s: *const Stream, n: u32) -> *const f32 {
+    let out_ptr = alloc(n * 4) as *mut f32;
+    let out = slice::from_raw_parts_mut(out_ptr, n as usize);
+    for i in 0..n as usize {
+        out[i] = hd_stream(s);
         s = adv_stream(s);
     }
-    BUF.as_ptr()
+    out_ptr
 }
 
 #[panic_handler]
@@ -54,4 +58,33 @@ pub extern "C" fn sin(x: f32) -> f32 {
 #[no_mangle]
 pub extern "C" fn cos(x: f32) -> f32 {
     libm::cosf(x)
+}
+
+static mut heap_ptr: *mut () = ptr::null_mut();
+static mut heap_end: *mut () = ptr::null_mut();
+
+// ??
+const ALLOC_SIZE_PAGES: usize = 4;
+
+#[no_mangle]
+pub unsafe extern "C" fn alloc(n: u32) -> *mut () {
+    let old_heap_ptr = heap_ptr;
+    if let Some(new_heap_ptr) = (heap_ptr as usize).checked_add(n as usize) {
+        if new_heap_ptr < heap_end as usize {
+            heap_ptr = new_heap_ptr as *mut ();
+            old_heap_ptr
+        } else {
+            let old_size = wasm32::memory_grow(0, ALLOC_SIZE_PAGES);
+            if old_size < usize::MAX {
+                let allocation = (old_size * 65536) as *mut ();
+                heap_ptr = (old_size * 65536 + n as usize) as *mut ();
+                heap_end = ((old_size + ALLOC_SIZE_PAGES) * 65536) as *mut ();
+                allocation
+            } else {
+                panic!()
+            }
+        }
+    } else {
+        panic!()
+    }
 }

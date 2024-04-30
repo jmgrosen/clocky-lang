@@ -139,7 +139,7 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
 
     let mut memories = wasm::MemorySection::new();
     memories.memory(wasm::MemoryType {
-        minimum: 1 << 15,
+        minimum: runtime.initial_memory_size as u64,
         maximum: None,
         memory64: false,
         shared: false,
@@ -154,7 +154,7 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
     });
 
     let mut elems = wasm::ElementSection::new();
-    // TODO: initialize runtime's table too?
+    runtime.emit_elements(&mut elems);
     let function_idxs: Vec<u32> = (func_offset..func_offset + global_defs.len() as u32).collect();
     let function_elems = wasm::Elements::Functions(&function_idxs);
     elems.active(Some(0), &wasm::ConstExpr::i32_const(func_offset as i32), function_elems);
@@ -353,13 +353,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     }
 
     fn alloc(&mut self) {
-        // TODO: check if we're out of memory lol
-        self.insns.push(wasm::Instruction::GlobalGet(self.translator.heap_global));
-        let t = self.temp(wasm::ValType::I32, 0);
-        self.insns.push(wasm::Instruction::LocalTee(t));
-        self.insns.push(wasm::Instruction::I32Add);
-        self.insns.push(wasm::Instruction::GlobalSet(self.translator.heap_global));
-        self.insns.push(wasm::Instruction::LocalGet(t));
+        self.insns.push(wasm::Instruction::Call(self.translator.runtime_exports["alloc"].1));
     }
 
     fn translate_op(&mut self, ctx: Rc<Ctx>, op: Op, args: &'a [&'a Expr<'a>]) {
