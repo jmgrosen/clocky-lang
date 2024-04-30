@@ -11,6 +11,7 @@ use indexmap::IndexSet;
 
 use crate::ir1::{DebruijnIndex, Op, Value, Global};
 use crate::ir2::{GlobalDef, Expr};
+use crate::runtime::Runtime;
 
 pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
     // TODO: configure this or include it at compile time
@@ -26,51 +27,12 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
     // exports.export("memory", wasm::ExportKind::Memory, 0);
     let mut function_types = FunctionTypes { types: runtime.types.clone() };
     let mut globals_out = wasm::GlobalSection::new();
-    let heap_global = runtime.globals.len() as u32;
-    let bad_global = heap_global + 1;
-    let globals_offset = bad_global + 1;
     let mut init_func = wasm::Function::new_with_locals_types([wasm::ValType::I32]);
 
-    for &func in runtime.functions.iter() {
-        functions.function(func);
-    }
-    for global in runtime.globals.iter() {
-        let valtype = valtype_to_valtype(&global.ty.content_type);
-        let s = global.ty.shared;
-        println!("{valtype:?}, {s:?}, {:?}", global.init_expr);
-        let constexpr_out = constexpr_to_constexpr(&global.init_expr);
-        globals_out.global(wasm::GlobalType {
-            val_type: valtype,
-            mutable: global.ty.mutable,
-            shared: global.ty.shared,
-        },
-                           &constexpr_out
-                       //  &wasm::ConstExpr::i32_const(1048928)
-        );
-        /*
-        globals.global(
-            wasm::GlobalType {
-                val_type: wasm::ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &wasm::ConstExpr::i32_const(0)
-        );
-        */
-    }
+    runtime.emit_functions(&mut functions);
+    runtime.emit_globals(&mut globals_out);
 
-    use wasm_encoder::Encode;
-    let mut encoded_globals = Vec::new();
-    globals_out.encode(&mut encoded_globals);
-    println!("encoded_globals: {encoded_globals:?}");
-
-    let mut bin_reader = wasmparser::BinaryReader::new(&encoded_globals);
-    bin_reader.read_size(1000000, "foo").unwrap();
-    let globals_reader = wasmparser::GlobalSectionReader::new(&encoded_globals[bin_reader.current_position()..], 0).unwrap();
-    for g in globals_reader {
-        println!("read global {:?}", g.unwrap());
-    }
-
+    let heap_global = globals_out.len();
     globals_out.global(
         wasm::GlobalType {
             val_type: wasm::ValType::I32,
@@ -79,6 +41,7 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
         },
         &wasm::ConstExpr::i32_const(0)
     );
+    let bad_global = globals_out.len();
     globals_out.global(
         wasm::GlobalType {
             val_type: wasm::ValType::I32,
@@ -87,24 +50,11 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
         },
         &wasm::ConstExpr::i32_const(0)
     );
+    let globals_offset = globals_out.len();
     exports.export("bad", wasm::ExportKind::Global, bad_global);
-    let rand_const = wasm::ConstExpr::i32_const(1048928);
-    let mut rand_bytes = Vec::new();
-    rand_const.encode(&mut rand_bytes);
-    println!("random const: {:?}", rand_bytes);
-    for body in runtime.code.iter() {
-        codes.raw(&runtime_bytes[body.clone()]);
-    }
-    for segment in runtime.data.iter() {
-        match segment.kind {
-            wasmparser::DataKind::Passive => {
-                data.passive(segment.data.iter().copied());
-            }
-            wasmparser::DataKind::Active { memory_index, ref offset_expr } => {
-                data.active(memory_index, &constexpr_to_constexpr(offset_expr), segment.data.iter().copied());
-            }
-        }
-    }
+
+    runtime.emit_code(&mut codes);
+    runtime.emit_data(&mut data);
 
     let func_offset = runtime.functions.len() as u32;
     let mut translator = Translator {
@@ -168,117 +118,9 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
         }
     }
 
-
     println!("main is {main}");
     exports.export("main", wasm::ExportKind::Global, globals_offset + main as u32);
-    for (name, &(k, i)) in runtime.exports.iter() {
-        exports.export(name, exportkind_to_exportkind(k), i);
-    }
-
-    /*
-    let mut adv_func = wasm::Function::new_with_locals_types([wasm::ValType::I32]);
-    let adv_func_type = function_types.for_args(1);
-    adv_func.instruction(&wasm::Instruction::LocalGet(0));
-    adv_func.instruction(&wasm::Instruction::I32Load(wasm::MemArg { offset: 4, align: 2, memory_index: 0 }));
-    adv_func.instruction(&wasm::Instruction::LocalTee(1));
-    adv_func.instruction(&wasm::Instruction::LocalGet(1));
-    adv_func.instruction(&wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-    adv_func.instruction(&wasm::Instruction::CallIndirect { ty: adv_func_type, table: 0 });
-    adv_func.instruction(&wasm::Instruction::End);
-    exports.export("adv_stream", wasm::ExportKind::Func, functions.len());
-    functions.function(adv_func_type);
-    codes.function(&adv_func);
-
-    let mut sample_func = wasm::Function::new_with_locals_types([wasm::ValType::I32, wasm::ValType::I32, wasm::ValType::I32]);
-    let sample_func_type = function_types.for_args(2);
-    sample_func.instruction(&wasm::Instruction::GlobalGet(heap_global));
-    // i32
-    sample_func.instruction(&wasm::Instruction::LocalTee(2));
-    sample_func.instruction(&wasm::Instruction::LocalTee(4));
-    // i32
-    sample_func.instruction(&wasm::Instruction::LocalGet(1));
-    // i32 i32
-    sample_func.instruction(&wasm::Instruction::I32Const(4));
-    // i32 i32 i32
-    sample_func.instruction(&wasm::Instruction::I32Mul);
-    // i32 i32
-    sample_func.instruction(&wasm::Instruction::I32Add);
-    // i32
-    sample_func.instruction(&wasm::Instruction::GlobalSet(heap_global));
-    //
-    sample_func.instruction(&wasm::Instruction::Loop(wasm::BlockType::Empty));
-    //
-    sample_func.instruction(&wasm::Instruction::LocalGet(1));
-    // i32
-    sample_func.instruction(&wasm::Instruction::If(wasm::BlockType::Empty));
-    //
-    // copy the current sample to the buffer
-    sample_func.instruction(&wasm::Instruction::LocalGet(2));
-    // i32
-    sample_func.instruction(&wasm::Instruction::LocalGet(0));
-    // i32 i32
-    sample_func.instruction(&wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-    // i32 i32
-    sample_func.instruction(&wasm::Instruction::F32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-    // i32 f32
-    sample_func.instruction(&wasm::Instruction::F32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-    //
-    sample_func.instruction(&wasm::Instruction::LocalGet(2));
-    // i32
-    sample_func.instruction(&wasm::Instruction::I32Const(4));
-    // i32 i32
-    sample_func.instruction(&wasm::Instruction::I32Add);
-    // i32
-    sample_func.instruction(&wasm::Instruction::LocalSet(2));
-    //
-
-    // compute the stream tail
-    sample_func.instruction(&wasm::Instruction::LocalGet(0));
-    // i32
-    sample_func.instruction(&wasm::Instruction::I32Load(wasm::MemArg { offset: 4, align: 2, memory_index: 0 }));
-    // i32
-    sample_func.instruction(&wasm::Instruction::LocalTee(3));
-    // i32
-    sample_func.instruction(&wasm::Instruction::LocalGet(3));
-    // i32 i32
-    sample_func.instruction(&wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-    // i32 i32
-    sample_func.instruction(&wasm::Instruction::CallIndirect { ty: function_types.for_args(1), table: 0 });
-    // i32
-    sample_func.instruction(&wasm::Instruction::LocalSet(0));
-    //
-    
-    // decrement number of samples remaining
-    sample_func.instruction(&wasm::Instruction::LocalGet(1));
-    // i32
-    sample_func.instruction(&wasm::Instruction::I32Const(1));
-    // i32 i32
-    sample_func.instruction(&wasm::Instruction::I32Sub);
-    // i32
-    sample_func.instruction(&wasm::Instruction::LocalSet(1));
-    //
-
-    sample_func.instruction(&wasm::Instruction::Br(1));
-    sample_func.instruction(&wasm::Instruction::End);
-    sample_func.instruction(&wasm::Instruction::End);
-
-    sample_func.instruction(&wasm::Instruction::LocalGet(4));
-    sample_func.instruction(&wasm::Instruction::End);
-
-    exports.export("sample", wasm::ExportKind::Func, functions.len());
-    functions.function(sample_func_type);
-    codes.function(&sample_func);
-
-    let mut hd_func = wasm::Function::new_with_locals_types([]);
-    let hd_func_type = function_types.types.len() as u32;
-    hd_func.instruction(&wasm::Instruction::LocalGet(0));
-    hd_func.instruction(&wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-    hd_func.instruction(&wasm::Instruction::F32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-    hd_func.instruction(&wasm::Instruction::End);
-    exports.export("hd_stream", wasm::ExportKind::Func, functions.len());
-    functions.function(hd_func_type);
-    codes.function(&hd_func);
-    */
+    runtime.emit_exports(&mut exports);
 
     init_func.instruction(&wasm::Instruction::End);
     let init_func_type = function_types.types.insert_full(
@@ -329,145 +171,6 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
     module.section(&codes);
 
     module.finish()
-}
-
-struct Runtime<'a> {
-    exports: HashMap<String, (wasmparser::ExternalKind, u32)>,
-    types: IndexSet<FuncType>,
-    functions: Vec<u32>,
-    // tables: _,
-    initial_memory_size: u32,
-    code: Vec<Range<usize>>,
-    data: Vec<wasmparser::Data<'a>>,
-    globals: Vec<wasmparser::Global<'a>>,
-}
-
-fn valtype_to_valtype(ty: &wasmparser::ValType) -> wasm_encoder::ValType {
-    match *ty {
-        wasmparser::ValType::I32 => wasm_encoder::ValType::I32,
-        wasmparser::ValType::I64 => wasm_encoder::ValType::I64,
-        wasmparser::ValType::F32 => wasm_encoder::ValType::F32,
-        wasmparser::ValType::F64 => wasm_encoder::ValType::F64,
-        wasmparser::ValType::V128 => wasm_encoder::ValType::V128,
-        wasmparser::ValType::Ref(_) => panic!("can't convert reftypes yet >:("),
-    }
-}
-
-fn functype_to_functype(ty: wasmparser::FuncType) -> FuncType {
-    FuncType::new(ty.params().iter().map(valtype_to_valtype),
-                  ty.results().iter().map(valtype_to_valtype))
-}
-
-fn constexpr_to_constexpr(ce: &wasmparser::ConstExpr<'_>) -> wasm::ConstExpr {
-    // why isn't this a method??
-    let mut reader = ce.get_binary_reader();
-    let bytes = reader.read_bytes(reader.bytes_remaining()).unwrap();
-    println!("constexpr bytes in: {bytes:?}");
-    let constexpr_out = wasm::ConstExpr::raw(bytes.iter().copied().take(bytes.len()-1));
-    let mut out_bytes = Vec::new();
-    use wasm_encoder::Encode;
-    constexpr_out.encode(&mut out_bytes);
-    println!("constexpr bytes out: {bytes:?}");
-    constexpr_out
-}
-
-fn exportkind_to_exportkind(k: wasmparser::ExternalKind) -> wasm::ExportKind {
-    match k {
-        wasmparser::ExternalKind::Func => wasm::ExportKind::Func,
-        wasmparser::ExternalKind::Table => wasm::ExportKind::Table,
-        wasmparser::ExternalKind::Memory => wasm::ExportKind::Memory,
-        wasmparser::ExternalKind::Global => wasm::ExportKind::Global,
-        wasmparser::ExternalKind::Tag => wasm::ExportKind::Tag,
-    }
-}
-
-impl<'a> Runtime<'a> {
-    // panics if buf is invalid
-    fn from_bytes(buf: &'a [u8]) -> Runtime<'a> {
-        use wasmparser::Payload::*;
-
-        let parser = wasmparser::Parser::new(0);
-        let mut types = IndexSet::new();
-        let mut functions = Vec::with_capacity(0);
-        let mut code = Vec::with_capacity(0);
-        let mut initial_memory_size = 0;
-        let mut globals = Vec::with_capacity(0);
-        let mut exports = HashMap::new();
-        let mut data = Vec::with_capacity(0);
-        for payload in parser.parse_all(buf) {
-            match payload.unwrap() {
-                Version { .. } => { }
-                TypeSection(type_reader) => {
-                    for func_type in type_reader.into_iter_err_on_gc_types() {
-                        types.insert(functype_to_functype(func_type.unwrap()));
-                    }
-                }
-                ImportSection(_) => { panic!("runtime should not have imports") }
-                FunctionSection(func_reader) => {
-                    functions = func_reader.into_iter().collect::<Result<_, _>>().unwrap();
-                }
-                TableSection(table_reader) => {
-                    // TODO: make sure we're handling this right. this
-                    // will be especially tricky if we define any
-                    // vtables within the runtime itself... which we
-                    // surely will if we pull in nontrivial libraries
-                    assert!(table_reader.count() == 1);
-                    let table = table_reader.into_iter().next().unwrap().unwrap();
-                    assert!(table.ty.element_type == wasmparser::RefType::FUNCREF);
-                    // TODO: is this what we expect? this is just what i found at first.
-                    assert!(table.ty.initial == 1);
-                    assert!(table.ty.maximum == Some(1));
-                }
-                MemorySection(mem_reader) => {
-                    assert!(mem_reader.count() == 1);
-                    let mem = mem_reader.into_iter().next().unwrap().unwrap();
-                    initial_memory_size = mem.initial as u32;
-                }
-                TagSection(_) => { panic!("tag section?") }
-                GlobalSection(global_reader) => {
-                    globals = global_reader.into_iter().collect::<Result<_, _>>().unwrap();
-                }
-                ExportSection(export_reader) => {
-                    for export in export_reader {
-                        let export = export.unwrap();
-                        exports.insert(export.name.to_string(), (export.kind, export.index));
-                    }
-                }
-                StartSection { .. } => { panic!("runtime should not have start, right?") }
-                ElementSection(_) => { panic!("element section?") }
-
-                DataCountSection { count, .. } => {
-                    assert!(count == 1);
-                }
-                DataSection(data_reader) => {
-                    data = data_reader.into_iter().collect::<Result<_, _>>().unwrap();
-                }
-
-                CodeSectionStart { count, .. } => {
-                    code.reserve_exact(count as usize);
-                }
-                CodeSectionEntry(body) => {
-                    code.push(body.range());
-                }
-
-                CustomSection(_) => { }
-
-                End(_) => { }
-
-                section => { panic!("weird section {section:?}") }
-            }
-        }
-
-        Runtime {
-            exports,
-            types,
-            functions,
-            initial_memory_size,
-            code,
-            data,
-            globals,
-        }
-    }
 }
 
 enum Ctx {
@@ -620,37 +323,6 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 let t1 = self.temp(wasm::ValType::I32, 1);
                 self.insns.push(wasm::Instruction::LocalSet(t1));
 
-                /*
-                // HACK: while the arity is zero, keep calling the closure
-                let loop_ty_idx = self.function_types.for_args(1);
-                self.insns.push(wasm::Instruction::Loop(wasm::BlockType::Empty));
-                // 
-                self.insns.push(wasm::Instruction::LocalGet(t1));
-                // i32
-                self.insns.push(wasm::Instruction::If(wasm::BlockType::Empty));
-                //
-                self.insns.push(wasm::Instruction::Else);
-                //
-                self.insns.push(wasm::Instruction::LocalGet(t0));
-                // i32
-                self.insns.push(wasm::Instruction::LocalGet(t0));
-                // i32 i32
-                self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-                // i32 i32
-                self.insns.push(wasm::Instruction::CallIndirect { ty: loop_ty_idx, table: 0 });
-                // i32
-                self.insns.push(wasm::Instruction::LocalTee(t0));
-                // i32
-                self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 4, align: 2, memory_index: 0 }));
-                // i32
-                self.insns.push(wasm::Instruction::LocalSet(t1));
-                //
-                self.insns.push(wasm::Instruction::Br(1));
-                self.insns.push(wasm::Instruction::End);
-                self.insns.push(wasm::Instruction::End);
-                */
-                
-
                 self.insns.push(wasm::Instruction::LocalGet(t1));
                 self.insns.push(wasm::Instruction::I32Const(args.len() as i32));
                 self.insns.push(wasm::Instruction::I32Eq);
@@ -754,7 +426,6 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.insns.push(wasm::Instruction::F32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
                 self.insns.push(wasm::Instruction::LocalGet(t0));
             },
-            //    todo!(),
             (Op::Pi, &[]) => {
                 // TODO: SUPER TEMP HACK
                 self.insns.push(wasm::Instruction::I32Const(4));

@@ -23,6 +23,7 @@ mod ir1;
 mod ir2;
 mod util;
 mod wasm;
+mod runtime;
 
 use builtin::make_builtins;
 use interp::get_samples;
