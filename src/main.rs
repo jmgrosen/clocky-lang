@@ -394,6 +394,15 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
     write_file(out.as_deref(), &wasm_bytes)?;
 
     //wasmparser::validate(&wasm_bytes).unwrap();
+
+    run(orig_wasm_bytes);
+
+    Ok(())
+}
+
+#[cfg(feature="run")]
+fn run(mut wasm_bytes: Vec<u8>) {
+    let wasm_mod = wasm_bytes.clone();
     use wasmparser::{Chunk, Payload::*};
     let mut validator = wasmparser::Validator::new();
     let mut cur = wasmparser::Parser::new(0);
@@ -481,15 +490,8 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
         // original.
         wasm_bytes.drain(..consumed);
     }
-
-    run(&orig_wasm_bytes);
-
-    Ok(())
-}
-
-fn run(wasm_mod: &[u8]) {
     let engine = wasmtime::Engine::default();
-    let module = wasmtime::Module::new(&engine, wasm_mod).unwrap();
+    let module = wasmtime::Module::new(&engine, &wasm_mod).unwrap();
     for export in module.exports() {
         println!("{export:?}");
     }
@@ -503,6 +505,10 @@ fn run(wasm_mod: &[u8]) {
     println!("res: {res}");
      */
     println!("main: {:?}", instance.get_global(&mut store, "main").unwrap().get(&mut store));
+}
+
+#[cfg(not(feature="run"))]
+fn run(_wasm_bytes: Vec<u8>) {
 }
 
 fn main() -> Result<(), ExitCode> {

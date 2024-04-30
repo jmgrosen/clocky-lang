@@ -6,4 +6,4 @@ def mapsig: for k : clock. [](sample -> sample) -> ~^(k) sample -> ~^(k) sample 
 def lin: for k : clock. ~^(k) sample =
     ((&^(k) s. \x. x :: `(!(unbox s) (addone x))) : sample -> ~^(k) sample) 2.0
 
-def main: for k : clock. ~^(k) sample = mapsig @(k) (box (\x. addone (addone x))) (lin @(k))
+def main: for k : clock. ~^(k) sample = mapsig @(k) (box (\x. sin (addone (addone x)))) (lin @(k))

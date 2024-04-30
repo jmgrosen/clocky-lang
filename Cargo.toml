@@ -1,3 +1,4 @@
+workspace = { members = ["runtime"] }
 [package]
 name = "clocky-lang"
 version = "0.1.0"
@@ -20,7 +21,12 @@ indenter = "0.3"
 imbl = "2.0.3"
 wasm-encoder = "0.205"
 wasmparser = "0.205"
-wasmtime = "20.0"
+indexmap = "2.2.6"
+wasmtime = { version = "20.0", optional = true }
+
+[features]
+default = ["run"]
+run = ["dep:wasmtime"]
 
 [profile.release]
 debug = true
