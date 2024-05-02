@@ -25,16 +25,46 @@ def phasor : for k : clock. sample -> ~^(k) sample =
                    } in
     phase :: `(!(unbox phasor) newphase)) : sample -> ~^(k) sample) 0.0
 
-def sum : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
-  &^(k) sum. \s1. \s2.
+def zipwith : for a : type. for b : type. for c : type. for k : clock.
+  [](a -> b -> c) -> ~^(k) a -> ~^(k) b -> ~^(k) c =
+  \f. &^(k) sum. \s1. \s2.
     let (x1, s1p) = %s1 in
     let (x2, s2p) = %s2 in
-    x1 + x2 :: `(!(unbox sum) !s1p !s2p)
+    unbox f x1 x2 :: `(!(unbox sum) !s1p !s2p)
+
+def sum : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
+  zipwith $(sample) $(sample) $(sample) @(k) (box (\x1. \x2. x1 + x2))
+
+def prod : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
+  zipwith $(sample) $(sample) $(sample) @(k) (box (\x1. \x2. x1 * x2))
+
+def abs : [](sample -> sample) =
+  box (\x. case x > 0.0 {
+             inl y => x
+           | inr y => 0.0 - x
+           })
+
+def amp : [](sample -> sample) =
+  box (\x.
+    let y = sin (2. * 3.14159 * x) in
+    (unbox abs (y * y * y)) * 0.8 + 0.2)
 
 def maps : for k : clock. [](sample -> sample) -> ~^(k) sample -> ~^(k) sample =
   map $(sample) $(sample) @(k)
 
-def main : for k : clock. ~^(k) sample =
-  sum @(k)
-    (maps @(k) (box (\x. sin (2. * 3.14159 * x) / 2.)) (phasor @(k) (440. / 48000.)))
+def onepole : for k : clock. sample -> ~^(k) sample -> |>^(k) ~^(k) sample =
+  \factor. \s.
+    let (initial, sp) = %s in
+    `(((&^(k) op. \acc. \spp.
+          let (x, sppp) = %spp in
+          let out = x * factor + acc * (1. - factor) in
+          out :: `(!(unbox op) out !sppp)) : sample -> ~^(k) sample -> ~^(k) sample) initial !sp)
+
+def wavesunfiltered : for k : clock. ~^(k) sample =
+  prod @(k)
+    (maps @(k) amp (phasor @(k) (0.1 / 48000.)))
     (maps @(k) (box (\x. x - 0.5)) (rands @(k) 1337))
+
+def main : for k : clock. ~^(k) sample =
+  0. :: `(!(onepole @(k) 0.4 (wavesunfiltered @(k))))
+  
