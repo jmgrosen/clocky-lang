@@ -30,3 +30,7 @@ run = ["dep:wasmtime"]
 
 [profile.release]
 debug = true
+
+[[bin]]
+name = "clocky"
+path = "src/main.rs"

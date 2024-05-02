@@ -35,7 +35,7 @@ def zipwith : for a : type. for b : type. for c : type. for k : clock.
 def sum : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
   zipwith $(sample) $(sample) $(sample) @(k) (box (\x1. \x2. x1 + x2))
 
-def prod : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
+def product : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
   zipwith $(sample) $(sample) $(sample) @(k) (box (\x1. \x2. x1 * x2))
 
 def abs : [](sample -> sample) =
@@ -61,10 +61,9 @@ def onepole : for k : clock. sample -> ~^(k) sample -> |>^(k) ~^(k) sample =
           out :: `(!(unbox op) out !sppp)) : sample -> ~^(k) sample -> ~^(k) sample) initial !sp)
 
 def wavesunfiltered : for k : clock. ~^(k) sample =
-  prod @(k)
+  product @(k)
     (maps @(k) amp (phasor @(k) (0.1 / 48000.)))
     (maps @(k) (box (\x. x - 0.5)) (rands @(k) 1337))
 
 def main : for k : clock. ~^(k) sample =
   0. :: `(!(onepole @(k) 0.4 (wavesunfiltered @(k))))
-  

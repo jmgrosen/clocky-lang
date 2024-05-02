@@ -1,4 +1,4 @@
 def doubleup: for k : clock. ~^(k) sample -> ~^(2k) sample =
   &^(k) d. \s.
-    let (x, sp) = *s in
+    let (x, sp) = %s in
     x :: `(!(unbox d) !sp)

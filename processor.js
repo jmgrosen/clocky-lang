@@ -14,6 +14,7 @@ class ClockyStreamProcessor extends AudioWorkletProcessor {
     this.instance = null;
     this.stream = null;
     this.sample_out = null;
+    this.first = true;
     console.log("created");
 
     this.port.onmessage = (event) => {
@@ -29,6 +30,11 @@ class ClockyStreamProcessor extends AudioWorkletProcessor {
 
   process(inputs, outputs, parameters) {
     if (this.instance) {
+      if (this.first) {
+        this.port.postMessage({goodToGo: true});
+        this.first = false;
+      }
+
       this.instance.exports.sample(this.sample_out, this.stream, 128);
       const mem_i32 = new Uint32Array(this.instance.exports.memory.buffer);
       const mem_f32 = new Float32Array(this.instance.exports.memory.buffer);
