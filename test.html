@@ -4,12 +4,10 @@
     <script type="module">
       const instance = (await WebAssembly.instantiateStreaming(fetch("test.wasm"), {})).instance;
 
+      const num_samples = 128;
       const stream = instance.exports.main;
-      const sample_out = instance.exports.alloc(8);
-      instance.exports.sample(sample_out, stream, 128);
-      const mem_i32 = new Uint32Array(instance.exports.memory.buffer);
-      const samples_ptr = mem_i32[sample_out / 4];
-      // const samples_ptr = instance.exports.sample(stream, 128);
+      const samples_ptr = instance.exports.alloc(4 * num_samples);
+      instance.exports.sample(stream, 128, samples_ptr);
       const mem_f32 = new Float32Array(instance.exports.memory.buffer);
       const samples = mem_f32.slice(samples_ptr/4, samples_ptr/4 + 128);
       console.log(samples);
