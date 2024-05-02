@@ -18,7 +18,6 @@ mod builtin;
 mod parse;
 mod interp;
 mod typing;
-mod ir0;
 mod ir1;
 mod ir2;
 mod util;
