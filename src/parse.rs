@@ -350,6 +350,18 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                     "./." => Binop::IDiv,
                     ".+." => Binop::IAdd,
                     ".-." => Binop::ISub,
+                    ">" => Binop::FGt,
+                    ">=" => Binop::FGe,
+                    "<" => Binop::FLt,
+                    "<=" => Binop::FLe,
+                    "==" => Binop::FEq,
+                    "!=" => Binop::FNe,
+                    ".>." => Binop::IGt,
+                    ".>=." => Binop::IGe,
+                    ".<." => Binop::ILt,
+                    ".<=." => Binop::ILe,
+                    ".==." => Binop::IEq,
+                    ".!=." => Binop::INe,
                     op => panic!("unknown binop \"{}\"", op)
                 };
                 let e2 = self.parse_expr(node.child(2).unwrap())?;

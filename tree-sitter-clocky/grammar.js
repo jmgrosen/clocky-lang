@@ -42,13 +42,13 @@ module.exports = grammar({
 
         sample: $ => /[-+]?\d+\.\d*/,
 
-        application_expression: $ => prec.left(4, seq($.expression, $.expression)),
+        application_expression: $ => prec.left(10, seq($.expression, $.expression)),
 
         lambda_expression: $ => prec.right(seq('\\', $.identifier, '.', $.expression)),
 
         lob_expression: $ => prec.right(seq('&', '^', '(', $.clock, ')', $.identifier, '.', $.expression)),
 
-        force_expression: $ => prec(5, seq('!', $.expression)),
+        force_expression: $ => prec(11, seq('!', $.expression)),
 
         gen_expression: $ => prec.right(seq($.expression, '::', $.expression)),
 
@@ -60,9 +60,9 @@ module.exports = grammar({
 
         unpair_expression: $ => prec.left(-1, seq('let', '(', $.identifier, ',', $.identifier, ')', '=', field('bound', $.expression), 'in', field('body', $.expression))),
 
-        inl_expression: $ => prec(5, seq('inl', $.expression)),
+        inl_expression: $ => prec(11, seq('inl', $.expression)),
 
-        inr_expression: $ => prec(5, seq('inr', $.expression)),
+        inr_expression: $ => prec(11, seq('inr', $.expression)),
 
         case_expression: $ => seq('case', $.expression, '{', 'inl', $.identifier, '=>', $.expression, '|', 'inr', $.identifier, '=>', $.expression, '}'),
 
@@ -70,15 +70,15 @@ module.exports = grammar({
 
         array_inner: $ => seq(repeat(seq($.expression, ',')), $.expression),
 
-        ungen_expression: $ => prec(6, seq('*', $.expression)),
+        ungen_expression: $ => prec(11, seq('%', $.expression)),
 
         unit_expression: $ => '()',
 
-        delay_expression: $ => prec(5, seq('`', $.expression)),
+        delay_expression: $ => prec(11, seq('`', $.expression)),
 
-        box_expression: $ => prec(5, seq('box', $.expression)),
+        box_expression: $ => prec(11, seq('box', $.expression)),
 
-        unbox_expression: $ => prec(5, seq('unbox', $.expression)),
+        unbox_expression: $ => prec(11, seq('unbox', $.expression)),
 
         clockapp_expression: $ => prec.left(seq($.expression, '@', '(', $.clock, ')')),
 
@@ -99,6 +99,18 @@ module.exports = grammar({
             prec.left(1, seq($.expression, '.&.', $.expression)),
             prec.left(1, seq($.expression, '.^.', $.expression)),
             prec.left(1, seq($.expression, '.|.', $.expression)),
+            prec.left(0, seq($.expression, '>', $.expression)),
+            prec.left(0, seq($.expression, '>=', $.expression)),
+            prec.left(0, seq($.expression, '<', $.expression)),
+            prec.left(0, seq($.expression, '<=', $.expression)),
+            prec.left(0, seq($.expression, '==', $.expression)),
+            prec.left(0, seq($.expression, '!=', $.expression)),
+            prec.left(0, seq($.expression, '.>.', $.expression)),
+            prec.left(0, seq($.expression, '.>=.', $.expression)),
+            prec.left(0, seq($.expression, '.<.', $.expression)),
+            prec.left(0, seq($.expression, '.<=.', $.expression)),
+            prec.left(0, seq($.expression, '.==.', $.expression)),
+            prec.left(0, seq($.expression, '.!=.', $.expression)),
         ),
 
         type: $ => choice(

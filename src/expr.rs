@@ -37,6 +37,12 @@ pub enum Binop {
     FDiv,
     FAdd,
     FSub,
+    FGt,
+    FGe,
+    FLt,
+    FLe,
+    FEq,
+    FNe,
     Shl,
     Shr,
     And,
@@ -46,6 +52,32 @@ pub enum Binop {
     IDiv,
     IAdd,
     ISub,
+    IGt,
+    IGe,
+    ILt,
+    ILe,
+    IEq,
+    INe,
+}
+
+impl Binop {
+    pub fn is_cmp(&self) -> bool {
+        match *self {
+            Binop::FGt => true,
+            Binop::FGe => true,
+            Binop::FLt => true,
+            Binop::FLe => true,
+            Binop::FEq => true,
+            Binop::FNe => true,
+            Binop::IGt => true,
+            Binop::IGe => true,
+            Binop::ILt => true,
+            Binop::ILe => true,
+            Binop::IEq => true,
+            Binop::INe => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

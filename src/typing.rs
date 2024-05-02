@@ -1047,11 +1047,19 @@ impl<'a> Typechecker<'a> {
                 }
             },
             &Expr::Binop(ref r, op, e1, e2) => {
+                // TODO: make this const somewhere and somehow
+                let tybool = Type::Sum(Box::new(Type::Unit), Box::new(Type::Unit));
                 let (ty1, ty2, tyret) = match op {
                     Binop::FMul => (Type::Sample, Type::Sample, Type::Sample),
                     Binop::FDiv => (Type::Sample, Type::Sample, Type::Sample),
                     Binop::FAdd => (Type::Sample, Type::Sample, Type::Sample),
                     Binop::FSub => (Type::Sample, Type::Sample, Type::Sample),
+                    Binop::FGt => (Type::Sample, Type::Sample, tybool),
+                    Binop::FGe => (Type::Sample, Type::Sample, tybool),
+                    Binop::FLt => (Type::Sample, Type::Sample, tybool),
+                    Binop::FLe => (Type::Sample, Type::Sample, tybool),
+                    Binop::FEq => (Type::Sample, Type::Sample, tybool),
+                    Binop::FNe => (Type::Sample, Type::Sample, tybool),
                     Binop::Shl => (Type::Index, Type::Index, Type::Index),
                     Binop::Shr => (Type::Index, Type::Index, Type::Index),
                     Binop::And => (Type::Index, Type::Index, Type::Index),
@@ -1061,6 +1069,12 @@ impl<'a> Typechecker<'a> {
                     Binop::IDiv => (Type::Index, Type::Index, Type::Index),
                     Binop::IAdd => (Type::Index, Type::Index, Type::Index),
                     Binop::ISub => (Type::Index, Type::Index, Type::Index),
+                    Binop::IGt => (Type::Index, Type::Index, tybool),
+                    Binop::IGe => (Type::Index, Type::Index, tybool),
+                    Binop::ILt => (Type::Index, Type::Index, tybool),
+                    Binop::ILe => (Type::Index, Type::Index, tybool),
+                    Binop::IEq => (Type::Index, Type::Index, tybool),
+                    Binop::INe => (Type::Index, Type::Index, tybool),
                 };
                 // TODO: should probably have a more specific type error for this?
                 self.check(ctx, e1, &ty1)?;

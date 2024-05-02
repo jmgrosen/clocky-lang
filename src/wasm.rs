@@ -403,6 +403,38 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.insns.push(wasm::Instruction::F32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
                 self.insns.push(wasm::Instruction::LocalGet(t1));
             },
+            (Op::FGt | Op::FGe | Op::FLt | Op::FLe | Op::FEq | Op::FNe, &[e1, e2]) => {
+                // TODO: is this the right order?
+                //
+                // TODO: obviously it is silly to allocate a fresh
+                // boolean for every comparison. we should statically
+                // allocate two booleans.
+                self.translate(ctx.clone(), e1);
+                self.translate(ctx, e2);
+                self.insns.push(wasm::Instruction::F32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                let t0 = self.temp(wasm::ValType::F32, 0);
+                self.insns.push(wasm::Instruction::LocalSet(t0));
+                self.insns.push(wasm::Instruction::F32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                self.insns.push(wasm::Instruction::LocalGet(t0));
+                self.insns.push(match op {
+                    Op::FGt => wasm::Instruction::F32Gt,
+                    Op::FGe => wasm::Instruction::F32Ge,
+                    Op::FLt => wasm::Instruction::F32Lt,
+                    Op::FLe => wasm::Instruction::F32Le,
+                    Op::FEq => wasm::Instruction::F32Eq,
+                    Op::FNe => wasm::Instruction::F32Ne,
+                    _ => unreachable!()
+                });
+                let t1 = self.temp(wasm::ValType::I32, 0);
+                self.insns.push(wasm::Instruction::LocalSet(t1));
+                self.insns.push(wasm::Instruction::I32Const(8));
+                self.alloc();
+                let t2 = self.temp(wasm::ValType::I32, 1);
+                self.insns.push(wasm::Instruction::LocalTee(t2));
+                self.insns.push(wasm::Instruction::LocalGet(t1));
+                self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                self.insns.push(wasm::Instruction::LocalGet(t2));
+            },
             (Op::Sin | Op::Cos, &[e]) => {
                 let op_name = match op {
                     Op::Sin => "sin",
@@ -472,6 +504,37 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 //
                 self.insns.push(wasm::Instruction::LocalGet(t1));
                 // res
+            },
+            (Op::IGt | Op::IGe | Op::ILt | Op::ILe | Op::IEq | Op::INe, &[e1, e2]) => {
+                // TODO: is this the right order?
+                //
+                // TODO: obviously it is silly to allocate a fresh
+                // boolean for every comparison. we should statically
+                // allocate two booleans.
+                self.translate(ctx.clone(), e1);
+                self.translate(ctx, e2);
+                self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                let t0 = self.temp(wasm::ValType::I32, 0);
+                self.insns.push(wasm::Instruction::LocalSet(t0));
+                self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                self.insns.push(wasm::Instruction::LocalGet(t0));
+                self.insns.push(match op {
+                    Op::IGt => wasm::Instruction::I32GtU,
+                    Op::IGe => wasm::Instruction::I32GeU,
+                    Op::ILt => wasm::Instruction::I32LtU,
+                    Op::ILe => wasm::Instruction::I32LeU,
+                    Op::IEq => wasm::Instruction::I32Eq,
+                    Op::INe => wasm::Instruction::I32Ne,
+                    _ => unreachable!()
+                });
+                self.insns.push(wasm::Instruction::LocalSet(t0));
+                self.insns.push(wasm::Instruction::I32Const(8));
+                self.alloc();
+                let t1 = self.temp(wasm::ValType::I32, 1);
+                self.insns.push(wasm::Instruction::LocalTee(t1));
+                self.insns.push(wasm::Instruction::LocalGet(t0));
+                self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                self.insns.push(wasm::Instruction::LocalGet(t1));
             },
             (Op::ReinterpF2I, &[e]) => {
                 self.translate(ctx, e);

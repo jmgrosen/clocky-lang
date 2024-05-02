@@ -1,7 +1,7 @@
 def map : for a : type. for b : type. for k : clock.
   [](a -> b) -> ~^(k) a -> ~^(k) b =
   \f. &^(k) r. \s.
-    let (x, sp) = *s in
+    let (x, sp) = %s in
     unbox f x :: `(!(unbox r) !sp)
 
 def randi : for k : clock. index -> ~^(k) index =
@@ -16,5 +16,25 @@ def rands : for k : clock. index -> ~^(k) sample =
   \seed.
     (map $(index) $(sample) @(k) convert (randi @(k) seed))
 
+def phasor : for k : clock. sample -> ~^(k) sample =
+  \delta. ((&^(k) phasor. \phase.
+    let prenewphase = phase + delta in
+    let newphase = case prenewphase <= 1.0 {
+                     inl x => prenewphase
+                   | inr x => prenewphase - 1.0
+                   } in
+    phase :: `(!(unbox phasor) newphase)) : sample -> ~^(k) sample) 0.0
+
+def sum : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
+  &^(k) sum. \s1. \s2.
+    let (x1, s1p) = %s1 in
+    let (x2, s2p) = %s2 in
+    x1 + x2 :: `(!(unbox sum) !s1p !s2p)
+
+def maps : for k : clock. [](sample -> sample) -> ~^(k) sample -> ~^(k) sample =
+  map $(sample) $(sample) @(k)
+
 def main : for k : clock. ~^(k) sample =
-  rands @(k) 1337
+  sum @(k)
+    (maps @(k) (box (\x. sin (2. * 3.14159 * x) / 2.)) (phasor @(k) (440. / 48000.)))
+    (maps @(k) (box (\x. x - 0.5)) (rands @(k) 1337))

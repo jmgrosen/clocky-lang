@@ -1,4 +1,4 @@
 def doubleup: ~^(k) sample -> ~^(2k) sample =
   &^(k) d. \s.
-    let (x, sp) = *s in
+    let (x, sp) = %s in
     x :: `(x :: `(!(unbox d) !sp))
