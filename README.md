@@ -1,1 +1,5 @@
-𝛌👂
+# Clocky
+
+```sh
+cargo +nightly -Z bindeps build --release
+```
