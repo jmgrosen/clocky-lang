@@ -23,6 +23,10 @@
 
     :language clocky
     :feature keyword
+    ((top_level_def "def" @font-lock-keyword-face))
+
+    :language clocky
+    :feature keyword
     ((forall_type "for" @font-lock-keyword-face))
 
     :language clocky
