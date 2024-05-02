@@ -23,6 +23,7 @@ wasm-encoder = "0.205"
 wasmparser = "0.205"
 indexmap = "2.2.6"
 wasmtime = { version = "20.0", optional = true }
+clocky-runtime = { path = "runtime", artifact = "cdylib", target = "wasm32-unknown-unknown" }
 
 [features]
 default = ["run"]

@@ -13,12 +13,12 @@ use crate::ir1::{DebruijnIndex, Op, Value, Global};
 use crate::ir2::{GlobalDef, Expr};
 use crate::runtime::Runtime;
 
+const RUNTIME_BYTES: &'static [u8] = include_bytes!(env!("CARGO_CDYLIB_FILE_CLOCKY_RUNTIME"));
+
 pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
-    // TODO: configure this or include it at compile time
-    let mut runtime_bytes = Vec::new();
-    std::fs::File::open("target/wasm32-unknown-unknown/release/clocky_runtime.wasm").unwrap()
-        .read_to_end(&mut runtime_bytes).unwrap();
-    let runtime = Runtime::from_bytes(&runtime_bytes);
+    // TODO: can we parse more of this at compile time?
+    // probably... would have to be a build script though, I imagine
+    let runtime = Runtime::from_bytes(RUNTIME_BYTES);
 
     let mut codes = wasm::CodeSection::new();
     let mut data = wasm::DataSection::new();
