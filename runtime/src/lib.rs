@@ -34,15 +34,21 @@ pub unsafe extern "C" fn adv_stream(s: *const Stream) -> *const Stream {
     ((*tail).func)(tail) as *const Stream
 }
 
+#[repr(C)]
+pub struct SampleOut {
+    ptr: *const f32,
+    s: *const Stream,
+}
+
 #[no_mangle]
-pub unsafe extern "C" fn sample(mut s: *const Stream, n: u32) -> *const f32 {
+pub unsafe extern "C" fn sample(s_out: *mut SampleOut, mut s: *const Stream, n: u32) {
     let out_ptr = alloc(n * 4) as *mut f32;
     let out = slice::from_raw_parts_mut(out_ptr, n as usize);
     for i in 0..n as usize {
-        out[i] = hd_stream(s);
+        *out.get_unchecked_mut(i) = hd_stream(s);
         s = adv_stream(s);
     }
-    out_ptr
+    *s_out = SampleOut { ptr: out_ptr, s };
 }
 
 #[panic_handler]
