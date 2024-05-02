@@ -31,6 +31,23 @@ pub enum Value<'a> {
 pub type Env<'a> = HashMap<Symbol, Value<'a>>;
 // type Env<'a> = imbl::HashMap<Symbol, Value<'a>>;
 
+#[derive(Debug, Clone, Copy)]
+pub enum Binop {
+    FMul,
+    FDiv,
+    FAdd,
+    FSub,
+    Shl,
+    Shr,
+    And,
+    Xor,
+    Or,
+    IMul,
+    IDiv,
+    IAdd,
+    ISub,
+}
+
 #[derive(Debug, Clone)]
 pub enum Expr<'a, R> {
     Var(R, Symbol),
@@ -54,6 +71,7 @@ pub enum Expr<'a, R> {
     Unbox(R, &'a Expr<'a, R>),
     ClockApp(R, &'a Expr<'a, R>, Clock),
     TypeApp(R, &'a Expr<'a, R>, Type),
+    Binop(R, Binop, &'a Expr<'a, R>, &'a Expr<'a, R>),
 }
 
 impl<'a, R> Expr<'a, R> {
@@ -80,6 +98,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::Unbox(ref r, ref e) => Expr::Unbox(f(r), arena.alloc(e.map_ext(arena, f))),
             Expr::ClockApp(ref r, ref e, c) => Expr::ClockApp(f(r), arena.alloc(e.map_ext(arena, f)), c),
             Expr::TypeApp(ref r, ref e, ref ty) => Expr::TypeApp(f(r), arena.alloc(e.map_ext(arena, f)), ty.clone()),
+            Expr::Binop(ref r, op, ref e1, ref e2) => Expr::Binop(f(r), op, arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
         }
     }
 
@@ -110,6 +129,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::Unbox(ref r, _) => r,
             Expr::ClockApp(ref r, _, _) => r,
             Expr::TypeApp(ref r, _, _) => r,
+            Expr::Binop(ref r, _, _, _) => r,
         }
     }
 }
@@ -194,6 +214,8 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
                 write!(f, "ClockApp({}, {})", self.for_expr(e), self.for_clock(c)),
             Expr::TypeApp(_, ref e, ref ty) =>
                 write!(f, "TypeApp({}, {})", self.for_expr(e), self.for_type(ty)),
+            Expr::Binop(_, op, ref e1, ref e2) =>
+                write!(f, "Binop({:?}, {}, {})", op, self.for_expr(e1), self.for_expr(e2)),
         }
     }
 }

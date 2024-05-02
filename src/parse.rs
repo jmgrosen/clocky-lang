@@ -2,7 +2,7 @@ use string_interner::DefaultStringInterner;
 use typed_arena::Arena;
 use num::rational::Ratio;
 
-use crate::{expr::{Expr, Value, SourceFile, Symbol, TopLevelDef}, typing::{Type, ArraySize, Clock, Kind}};
+use crate::{expr::{Binop, Expr, SourceFile, Symbol, TopLevelDef, Value}, typing::{Type, ArraySize, Clock, Kind}};
 
 macro_rules! make_node_enum {
     ($enum_name:ident { $($rust_name:ident : $ts_name:ident),* } with matcher $matcher_name:ident) => {
@@ -61,6 +61,7 @@ make_node_enum!(ConcreteNode {
     UnboxExpression: unbox_expression,
     ClockAppExpression: clockapp_expression,
     TypeAppExpression: typeapp_expression,
+    BinopExpression: binop_expression,
     Type: type,
     WrapType: wrap_type,
     BaseType: base_type,
@@ -197,7 +198,12 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 Ok(Expr::Var(node.range(), interned_ident))
             },
             Some(ConcreteNode::Literal) => {
-                let int_lit = self.node_text(node).parse().map_err(|_| ParseError::BadLiteral(node.range()))?;
+                let text = self.node_text(node);
+                let int_lit = (if text.starts_with("0x") {
+                    usize::from_str_radix(&text[2..], 16)
+                } else {
+                    text.parse()
+                }).map_err(|_| ParseError::BadLiteral(node.range()))?;
                 Ok(Expr::Val(node.range(), Value::Index(int_lit)))
             },
             Some(ConcreteNode::Sample) => {
@@ -327,6 +333,27 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let e = self.parse_expr(node.child(0).unwrap())?;
                 let ty = self.parse_type(node.child(3).unwrap())?;
                 Ok(Expr::TypeApp(node.range(), self.alloc(e), ty))
+            },
+            Some(ConcreteNode::BinopExpression) => {
+                let e1 = self.parse_expr(node.child(0).unwrap())?;
+                let op = match self.node_text(node.child(1).unwrap()) {
+                    "*" => Binop::FMul,
+                    "/" => Binop::FDiv,
+                    "+" => Binop::FAdd,
+                    "-" => Binop::FSub,
+                    ".<<." => Binop::Shl,
+                    ".>>." => Binop::Shr,
+                    ".&." => Binop::And,
+                    ".^." => Binop::Xor,
+                    ".|." => Binop::Or,
+                    ".*." => Binop::IMul,
+                    "./." => Binop::IDiv,
+                    ".+." => Binop::IAdd,
+                    ".-." => Binop::ISub,
+                    op => panic!("unknown binop \"{}\"", op)
+                };
+                let e2 = self.parse_expr(node.child(2).unwrap())?;
+                Ok(Expr::Binop(node.range(), op, self.alloc(e1), self.alloc(e2)))
             },
             Some(_) =>
                 Err(ParseError::ExpectedExpression(node.range())),

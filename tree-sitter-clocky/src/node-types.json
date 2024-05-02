@@ -88,6 +88,21 @@
     "fields": {}
   },
   {
+    "type": "binop_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "box_expression",
     "named": true,
     "fields": {},
@@ -215,6 +230,10 @@
           "named": true
         },
         {
+          "type": "binop_expression",
+          "named": true
+        },
+        {
           "type": "box_expression",
           "named": true
         },
@@ -272,6 +291,10 @@
         },
         {
           "type": "sample",
+          "named": true
+        },
+        {
+          "type": "typeapp_expression",
           "named": true
         },
         {
@@ -479,6 +502,11 @@
     }
   },
   {
+    "type": "literal",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "lob_expression",
     "named": true,
     "fields": {},
@@ -664,6 +692,25 @@
     }
   },
   {
+    "type": "typeapp_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "expression",
+          "named": true
+        },
+        {
+          "type": "type",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "unbox_expression",
     "named": true,
     "fields": {},
@@ -807,6 +854,10 @@
     "named": false
   },
   {
+    "type": "-",
+    "named": false
+  },
+  {
     "type": "->",
     "named": false
   },
@@ -815,7 +866,47 @@
     "named": false
   },
   {
+    "type": ".&.",
+    "named": false
+  },
+  {
+    "type": ".*.",
+    "named": false
+  },
+  {
+    "type": ".+.",
+    "named": false
+  },
+  {
+    "type": ".-.",
+    "named": false
+  },
+  {
+    "type": "./.",
+    "named": false
+  },
+  {
+    "type": ".<<.",
+    "named": false
+  },
+  {
+    "type": ".>>.",
+    "named": false
+  },
+  {
+    "type": ".^.",
+    "named": false
+  },
+  {
+    "type": ".|.",
+    "named": false
+  },
+  {
     "type": "/",
+    "named": false
+  },
+  {
+    "type": "0x",
     "named": false
   },
   {
@@ -911,16 +1002,12 @@
     "named": false
   },
   {
-    "type": "literal",
+    "type": "sample",
     "named": true
   },
   {
     "type": "sample",
     "named": false
-  },
-  {
-    "type": "sample",
-    "named": true
   },
   {
     "type": "type",

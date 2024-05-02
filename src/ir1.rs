@@ -2,7 +2,7 @@ use std::{rc::Rc, collections::{HashMap, HashSet}, fmt};
 
 use imbl as im;
 
-use crate::expr::{Expr as HExpr, Symbol, Value as HValue};
+use crate::expr::{Expr as HExpr, Symbol, Value as HValue, Binop as HBinop};
 use crate::util::ArenaPlus;
 
 // okay, for real, what am i really getting here over just using u32...
@@ -84,13 +84,25 @@ impl Con {
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Op {
     Const(Value),
-    Add,
-    Sub,
-    Mul,
-    Div,
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
     Sin,
     Cos,
     Pi,
+    IAdd,
+    ISub,
+    IMul,
+    IDiv,
+    Shl,
+    Shr,
+    And,
+    Xor,
+    Or,
+    ReinterpF2I,
+    ReinterpI2F,
+    CastI2F,
     Proj(u32),
     UnGen,
     AllocAndFill,
@@ -99,16 +111,48 @@ pub enum Op {
 }
 
 impl Op {
+    fn from_binop(op: HBinop) -> Op {
+        match op {
+            HBinop::FMul => Op::FMul,
+            HBinop::FDiv => Op::FDiv,
+            HBinop::FAdd => Op::FAdd,
+            HBinop::FSub => Op::FSub,
+            HBinop::Shl => Op::Shl,
+            HBinop::Shr => Op::Shr,
+            HBinop::And => Op::And,
+            HBinop::Xor => Op::Xor,
+            HBinop::Or => Op::Or,
+            HBinop::IMul => Op::IMul,
+            HBinop::IDiv => Op::IDiv,
+            HBinop::IAdd => Op::IAdd,
+            HBinop::ISub => Op::ISub,
+        }
+    }
+}
+
+impl Op {
     fn arity(&self) -> Option<u8> {
         match *self {
             Op::Const(_) => Some(0),
-            Op::Add => Some(2),
-            Op::Sub => Some(2),
-            Op::Mul => Some(2),
-            Op::Div => Some(2),
+            Op::FAdd => Some(2),
+            Op::FSub => Some(2),
+            Op::FMul => Some(2),
+            Op::FDiv => Some(2),
             Op::Sin => Some(1),
             Op::Cos => Some(1),
             Op::Pi => Some(0),
+            Op::IAdd => Some(2),
+            Op::ISub => Some(2),
+            Op::IMul => Some(2),
+            Op::IDiv => Some(2),
+            Op::Shl => Some(2),
+            Op::Shr => Some(2),
+            Op::And => Some(2),
+            Op::Xor => Some(2),
+            Op::Or => Some(2),
+            Op::ReinterpF2I => Some(1),
+            Op::ReinterpI2F => Some(1),
+            Op::CastI2F => Some(1),
             Op::Proj(_) => Some(1),
             Op::UnGen => Some(1),
             Op::AllocAndFill => None,
@@ -398,6 +442,11 @@ impl<'a> Translator<'a> {
                 self.translate(ctx, e),
             HExpr::TypeApp(_, e, _) =>
                 self.translate(ctx, e),
+            HExpr::Binop(_, op, e1, e2) => {
+                let e1p = self.translate(ctx.clone(), e1);
+                let e2p = self.translate(ctx, e2);
+                Expr::Op(Op::from_binop(op), self.alloc_slice([self.alloc(e1p), self.alloc(e2p)]))
+            }
         }
     }
 

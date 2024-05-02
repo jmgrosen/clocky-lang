@@ -29,24 +29,26 @@ module.exports = grammar({
             $.delay_expression,
             $.box_expression,
             $.unbox_expression,
-            $.clockapp_expression
+            $.clockapp_expression,
+            $.typeapp_expression,
+            $.binop_expression
         ),
 
         wrap_expression: $ => seq('(', $.expression, ')'),    
 
         identifier: $ => /[a-z][a-z0-9_]*/,
 
-        literal: $ => /\d+/,
+        literal: $ => choice(/\d+/, seq('0x', /[\da-fA-F]+/)),
 
-        sample: $ => /-?\d+\.\d*/,
+        sample: $ => /[-+]?\d+\.\d*/,
 
-        application_expression: $ => prec.left(seq($.expression, $.expression)),
+        application_expression: $ => prec.left(4, seq($.expression, $.expression)),
 
         lambda_expression: $ => prec.right(seq('\\', $.identifier, '.', $.expression)),
 
         lob_expression: $ => prec.right(seq('&', '^', '(', $.clock, ')', $.identifier, '.', $.expression)),
 
-        force_expression: $ => prec(2, seq('!', $.expression)),
+        force_expression: $ => prec(5, seq('!', $.expression)),
 
         gen_expression: $ => prec.right(seq($.expression, '::', $.expression)),
 
@@ -58,9 +60,9 @@ module.exports = grammar({
 
         unpair_expression: $ => prec.left(-1, seq('let', '(', $.identifier, ',', $.identifier, ')', '=', field('bound', $.expression), 'in', field('body', $.expression))),
 
-        inl_expression: $ => prec(2, seq('inl', $.expression)),
+        inl_expression: $ => prec(5, seq('inl', $.expression)),
 
-        inr_expression: $ => prec(2, seq('inr', $.expression)),
+        inr_expression: $ => prec(5, seq('inr', $.expression)),
 
         case_expression: $ => seq('case', $.expression, '{', 'inl', $.identifier, '=>', $.expression, '|', 'inr', $.identifier, '=>', $.expression, '}'),
 
@@ -68,19 +70,36 @@ module.exports = grammar({
 
         array_inner: $ => seq(repeat(seq($.expression, ',')), $.expression),
 
-        ungen_expression: $ => prec(2, seq('*', $.expression)),
+        ungen_expression: $ => prec(6, seq('*', $.expression)),
 
         unit_expression: $ => '()',
 
-        delay_expression: $ => prec(2, seq('`', $.expression)),
+        delay_expression: $ => prec(5, seq('`', $.expression)),
 
-        box_expression: $ => prec(2, seq('box', $.expression)),
+        box_expression: $ => prec(5, seq('box', $.expression)),
 
-        unbox_expression: $ => prec(2, seq('unbox', $.expression)),
+        unbox_expression: $ => prec(5, seq('unbox', $.expression)),
 
         clockapp_expression: $ => prec.left(seq($.expression, '@', '(', $.clock, ')')),
 
-        typeapp_expression: $ => prec.left(seq($.expression, '$', '(', $.clock, ')')),
+        typeapp_expression: $ => prec.left(seq($.expression, '$', '(', $.type, ')')),
+
+        binop_expression: $ => choice(
+            prec.left(2, seq($.expression, '*', $.expression)),
+            prec.left(2, seq($.expression, '.*.', $.expression)),
+            prec.left(2, seq($.expression, '/', $.expression)),
+            prec.left(2, seq($.expression, './.', $.expression)),
+            prec.left(1, seq($.expression, '+', $.expression)),
+            prec.left(1, seq($.expression, '.+.', $.expression)),
+            prec.left(1, seq($.expression, '-', $.expression)),
+            prec.left(1, seq($.expression, '.-.', $.expression)),
+            // TODO: fix these precedences
+            prec.left(1, seq($.expression, '.<<.', $.expression)),
+            prec.left(1, seq($.expression, '.>>.', $.expression)),
+            prec.left(1, seq($.expression, '.&.', $.expression)),
+            prec.left(1, seq($.expression, '.^.', $.expression)),
+            prec.left(1, seq($.expression, '.|.', $.expression)),
+        ),
 
         type: $ => choice(
             $.wrap_type,

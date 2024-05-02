@@ -17,7 +17,7 @@
           stream = instance.exports.adv_stream(stream);
       }
                           */
-      const num_samples = 10000000;
+      const num_samples = 1000;
       const samples_ptr = instance.exports.sample(stream, num_samples);
       const mem_f32 = new Float32Array(instance.exports.memory.buffer);
       const samples = mem_f32.slice(samples_ptr/4, samples_ptr/4 + num_samples);

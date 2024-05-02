@@ -525,12 +525,16 @@ fn main() -> Result<(), ExitCode> {
     let pi = interner.get_or_intern_static("pi");
     let sin = interner.get_or_intern_static("sin");
     let addone = interner.get_or_intern_static("addone");
+    let reinterp = interner.get_or_intern_static("reinterp");
+    let cast = interner.get_or_intern_static("cast");
     globals.insert(add, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
     globals.insert(div, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
     globals.insert(mul, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
     globals.insert(pi, typing::Type::Sample);
     globals.insert(sin, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
     globals.insert(addone, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
+    globals.insert(reinterp, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
+    globals.insert(cast, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
 
     let mut toplevel = TopLevel { arena: &annot_arena, interner, globals };
 

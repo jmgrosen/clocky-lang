@@ -1,0 +1,20 @@
+def map : for a : type. for b : type. for k : clock.
+  [](a -> b) -> ~^(k) a -> ~^(k) b =
+  \f. &^(k) r. \s.
+    let (x, sp) = *s in
+    unbox f x :: `(!(unbox r) !sp)
+
+def randi : for k : clock. index -> ~^(k) index =
+  &^(k) r. \seed.
+    let newseed = seed .*. 196314165 .+. 907633515 in
+    newseed :: `(!(unbox r) newseed)
+
+def convert : [](index -> sample) = box (\x.
+  reinterp (0x3F800000 .|. (x .>>. 9)) - 1.0)
+
+def rands : for k : clock. index -> ~^(k) sample =
+  \seed.
+    (map $(index) $(sample) @(k) convert (randi @(k) seed))
+
+def main : for k : clock. ~^(k) sample =
+  rands @(k) 1337

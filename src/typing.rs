@@ -8,7 +8,7 @@ use num::{One, rational::Ratio};
 use string_interner::DefaultStringInterner;
 use indenter::{Format, indented, Indented};
 
-use crate::expr::{SourceFile, Symbol, Expr, Value};
+use crate::expr::{Binop, Expr, SourceFile, Symbol, Value};
 use crate::util::parenthesize;
 
 // eventually this will get more complicated...
@@ -1045,6 +1045,27 @@ impl<'a> Typechecker<'a> {
                     ty =>
                         Err(TypeError::NonForallTypeApp { range: r.clone(), purported_forall_type: e, actual_type: ty }),
                 }
+            },
+            &Expr::Binop(ref r, op, e1, e2) => {
+                let (ty1, ty2, tyret) = match op {
+                    Binop::FMul => (Type::Sample, Type::Sample, Type::Sample),
+                    Binop::FDiv => (Type::Sample, Type::Sample, Type::Sample),
+                    Binop::FAdd => (Type::Sample, Type::Sample, Type::Sample),
+                    Binop::FSub => (Type::Sample, Type::Sample, Type::Sample),
+                    Binop::Shl => (Type::Index, Type::Index, Type::Index),
+                    Binop::Shr => (Type::Index, Type::Index, Type::Index),
+                    Binop::And => (Type::Index, Type::Index, Type::Index),
+                    Binop::Xor => (Type::Index, Type::Index, Type::Index),
+                    Binop::Or => (Type::Index, Type::Index, Type::Index),
+                    Binop::IMul => (Type::Index, Type::Index, Type::Index),
+                    Binop::IDiv => (Type::Index, Type::Index, Type::Index),
+                    Binop::IAdd => (Type::Index, Type::Index, Type::Index),
+                    Binop::ISub => (Type::Index, Type::Index, Type::Index),
+                };
+                // TODO: should probably have a more specific type error for this?
+                self.check(ctx, e1, &ty1)?;
+                self.check(ctx, e2, &ty2)?;
+                Ok(tyret)
             },
             _ =>
                 Err(TypeError::synthesis_unsupported(expr)),

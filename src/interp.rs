@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::expr::{Expr, Value, Env, Symbol};
+use crate::expr::{Binop, Expr, Value, Env, Symbol};
 use crate::builtin::BuiltinsMap;
 
 pub struct InterpretationContext<'a, 'b> {
@@ -12,6 +12,34 @@ pub struct InterpretationContext<'a, 'b> {
 impl<'a, 'b> InterpretationContext<'a, 'b> {
     fn with_env(&self, new_env: Env<'a>) -> InterpretationContext<'a, 'b> {
         InterpretationContext { env: new_env, ..*self }
+    }
+}
+
+fn interp_binop<'a>(op: Binop, v1: Value<'a>, v2: Value<'a>) -> Result<Value<'a>, &'static str> {
+    match (v1, v2) {
+        (Value::Sample(x1), Value::Sample(x2)) =>
+            Ok(Value::Sample(match op {
+                Binop::FMul => x1 * x2,
+                Binop::FDiv => x1 / x2,
+                Binop::FAdd => x1 + x2,
+                Binop::FSub => x1 - x2,
+                _ => return Err("cannot do some weird binop on two samples"),
+            })),
+        (Value::Index(i1), Value::Index(i2)) =>
+            Ok(Value::Index(match op {
+                Binop::IMul => i1 * i2,
+                Binop::IDiv => i1 / i2,
+                Binop::IAdd => i1 + i2,
+                Binop::ISub => i1 - i2,
+                Binop::Shl => i1 << i2,
+                Binop::Shr => i1 >> i2,
+                Binop::And => i1 & i2,
+                Binop::Xor => i1 ^ i2,
+                Binop::Or => i1 | i2,
+                _ => return Err("cannot do some weird binop on two indices"),
+            })),
+        (_, _) =>
+            Err("bad binop combo"),
     }
 }
 
@@ -153,6 +181,8 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
             interp(ctx, e),
         Expr::TypeApp(_, e, _) =>
             interp(ctx, e),
+        Expr::Binop(_, op, e1, e2) =>
+            interp_binop(op, interp(ctx, e1)?, interp(ctx, e2)?),
     }
 }
 

@@ -52,23 +52,29 @@ builtins!(
       [ &ir2::Expr::Op(Op::Sin, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
     cos[1]
       { &[Value::Sample(s)] => Ok(Value::Sample(s.cos())) }
-      [ &ir2::Expr::Op(Op::Sin, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+      [ &ir2::Expr::Op(Op::Cos, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
     add[2]
       { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 + s2)) }
-      [ &ir2::Expr::Op(Op::Add, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
+      [ &ir2::Expr::Op(Op::FAdd, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
     sub[2]
       { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 - s2)) }
       // TODO: make sure this order is correct?
-      [ &ir2::Expr::Op(Op::Sub, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
+      [ &ir2::Expr::Op(Op::FSub, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
     mul[2]
       { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 * s2)) }
-      [ &ir2::Expr::Op(Op::Mul, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
+      [ &ir2::Expr::Op(Op::FMul, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
     div[2]
       { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 / s2)) }
-      [ &ir2::Expr::Op(Op::Div, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
+      [ &ir2::Expr::Op(Op::FDiv, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
     addone[1]
       { &[Value::Sample(s)] => Ok(Value::Sample(s + 1.0)) }
-      [ &ir2::Expr::Op(Op::Add, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Op(Op::Const(crate::ir1::Value::Sample(1.0)), &[])]) ],
+      [ &ir2::Expr::Op(Op::FAdd, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Op(Op::Const(crate::ir1::Value::Sample(1.0)), &[])]) ],
+    reinterp[1]
+      { &[Value::Index(i)] => Ok(Value::Sample(f32::from_bits(i as u32))) }
+      [ &ir2::Expr::Op(Op::ReinterpI2F, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+    cast[1]
+      { &[Value::Index(i)] => Ok(Value::Sample(i as f32)) }
+      [ &ir2::Expr::Op(Op::CastI2F, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
     // sub[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 - s2)) },
     // mul[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 * s2)) },
     // div[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 / s2)) }

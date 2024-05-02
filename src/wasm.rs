@@ -377,8 +377,8 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.insns.push(wasm::Instruction::F32Const(x));
                 self.insns.push(wasm::Instruction::F32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
             },
-            // TODO: extract these out into a "BinOp" op
-            (Op::Add | Op::Sub | Op::Mul | Op::Div, &[e1, e2]) => {
+            // TODO: extract these out into a "BinOp" op?
+            (Op::FAdd | Op::FSub | Op::FMul | Op::FDiv, &[e1, e2]) => {
                 // TODO: is this the right order?
                 self.translate(ctx.clone(), e1);
                 self.translate(ctx, e2);
@@ -388,10 +388,10 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.insns.push(wasm::Instruction::F32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
                 self.insns.push(wasm::Instruction::LocalGet(t0));
                 self.insns.push(match op {
-                    Op::Add => wasm::Instruction::F32Add,
-                    Op::Sub => wasm::Instruction::F32Sub,
-                    Op::Mul => wasm::Instruction::F32Mul,
-                    Op::Div => wasm::Instruction::F32Div,
+                    Op::FAdd => wasm::Instruction::F32Add,
+                    Op::FSub => wasm::Instruction::F32Sub,
+                    Op::FMul => wasm::Instruction::F32Mul,
+                    Op::FDiv => wasm::Instruction::F32Div,
                     _ => unreachable!()
                 });
                 self.insns.push(wasm::Instruction::LocalSet(t0));
@@ -427,6 +427,83 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.dup(wasm::ValType::I32);
                 self.insns.push(wasm::Instruction::F32Const(std::f32::consts::PI));
                 self.insns.push(wasm::Instruction::F32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+            },
+            (Op::IAdd | Op::ISub | Op::IMul | Op::IDiv | Op::Shl | Op::Shr | Op::And | Op::Xor | Op::Or, &[e1, e2]) => {
+                // TODO: is this the right order?
+                //
+                self.translate(ctx.clone(), e1);
+                // e1
+                self.translate(ctx, e2);
+                // e1 e2
+                self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                // e1 *e2
+                let t0 = self.temp(wasm::ValType::I32, 0);
+                self.insns.push(wasm::Instruction::LocalSet(t0));
+                // e1
+                self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                // *e1
+                self.insns.push(wasm::Instruction::LocalGet(t0));
+                // *e1 *e2
+                self.insns.push(match op {
+                    Op::IAdd => wasm::Instruction::I32Add,
+                    Op::ISub => wasm::Instruction::I32Sub,
+                    Op::IMul => wasm::Instruction::I32Mul,
+                    Op::IDiv => wasm::Instruction::I32DivU,
+                    Op::Shl => wasm::Instruction::I32Shl,
+                    Op::Shr => wasm::Instruction::I32ShrU,
+                    Op::And => wasm::Instruction::I32And,
+                    Op::Xor => wasm::Instruction::I32Xor,
+                    Op::Or => wasm::Instruction::I32Or,
+                    _ => unreachable!()
+                });
+                // *res
+                self.insns.push(wasm::Instruction::LocalSet(t0));
+                //
+                self.insns.push(wasm::Instruction::I32Const(4));
+                // 4
+                self.alloc();
+                // res
+                let t1 = self.temp(wasm::ValType::I32, 1);
+                self.insns.push(wasm::Instruction::LocalTee(t1));
+                // res
+                self.insns.push(wasm::Instruction::LocalGet(t0));
+                // res *res
+                self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                //
+                self.insns.push(wasm::Instruction::LocalGet(t1));
+                // res
+            },
+            (Op::ReinterpF2I, &[e]) => {
+                self.translate(ctx, e);
+                self.insns.push(wasm::Instruction::F32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                self.insns.push(wasm::Instruction::I32ReinterpretF32);
+                let t0 = self.temp(wasm::ValType::I32, 0);
+                self.insns.push(wasm::Instruction::LocalSet(t0));
+                self.insns.push(wasm::Instruction::I32Const(4));
+                self.alloc();
+                let t1 = self.temp(wasm::ValType::I32, 1);
+                self.insns.push(wasm::Instruction::LocalTee(t1));
+                self.insns.push(wasm::Instruction::LocalGet(t0));
+                self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                self.insns.push(wasm::Instruction::LocalGet(t1));
+            },
+            (Op::ReinterpI2F | Op::CastI2F, &[e]) => {
+                self.translate(ctx, e);
+                self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                self.insns.push(match op {
+                    Op::ReinterpI2F => wasm::Instruction::F32ReinterpretI32,
+                    Op::CastI2F => wasm::Instruction::F32ConvertI32U,
+                    _ => unreachable!(),
+                });
+                let t0 = self.temp(wasm::ValType::F32, 0);
+                self.insns.push(wasm::Instruction::LocalSet(t0));
+                self.insns.push(wasm::Instruction::I32Const(4));
+                self.alloc();
+                let t1 = self.temp(wasm::ValType::I32, 0);
+                self.insns.push(wasm::Instruction::LocalTee(t1));
+                self.insns.push(wasm::Instruction::LocalGet(t0));
+                self.insns.push(wasm::Instruction::F32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                self.insns.push(wasm::Instruction::LocalGet(t1));
             },
             (Op::Proj(i), &[e]) => {
                 self.translate(ctx, e);
