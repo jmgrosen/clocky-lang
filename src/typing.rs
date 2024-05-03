@@ -1046,7 +1046,7 @@ impl<'a> Typechecker<'a> {
                         Err(TypeError::NonForallTypeApp { range: r.clone(), purported_forall_type: e, actual_type: ty }),
                 }
             },
-            &Expr::Binop(ref r, op, e1, e2) => {
+            &Expr::Binop(ref _r, op, e1, e2) => {
                 // TODO: make this const somewhere and somehow
                 let tybool = Type::Sum(Box::new(Type::Unit), Box::new(Type::Unit));
                 let (ty1, ty2, tyret) = match op {

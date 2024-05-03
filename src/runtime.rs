@@ -116,6 +116,7 @@ impl<'a> Runtime<'a> {
                     let initial = table.ty.initial;
                     assert!(initial as usize <= functions.len());
                     assert!(table.ty.maximum == Some(initial));
+                    found_table = true;
                 }
                 MemorySection(mem_reader) => {
                     assert!(mem_reader.count() == 1);
@@ -219,8 +220,8 @@ impl<'a> Runtime<'a> {
     pub fn emit_elements(&self, elems: &mut wasm::ElementSection) {
         if let Some(ref elem) = self.elem {
             if let wasmparser::ElementKind::Active { table_index, offset_expr } = elem.kind {
-                let mut func_idxs = Vec::with_capacity(0);
-                let mut init_exprs = Vec::with_capacity(0);
+                let func_idxs: Vec<_>;
+                let init_exprs: Vec<_>;
                 let actual_elems = match elem.items {
                     wasmparser::ElementItems::Functions(ref funcs) => {
                         func_idxs = funcs.clone().into_iter().collect::<Result<_, _>>().unwrap();

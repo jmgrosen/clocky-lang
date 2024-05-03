@@ -118,6 +118,7 @@ impl<'a> TopLevel<'a> {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // necessary bc we are just printing the debug repr right now
 enum TopLevelError<'a> {
     IoError(std::io::Error),
     ParseError(String, parse::FullParseError),
@@ -373,7 +374,7 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
     let expr2_arena = util::ArenaPlus { arena: &expr2_under_arena, ptr_arena: &expr2_ptr_arena };
     let mut translator2 = ir2::Translator { arena: &expr2_arena, globals: global_defs };
 
-    let defs_ir2: HashMap<Symbol, &ir2::Expr<'_>> = defs_ir1.iter().map(|(&name, expr)| {
+    for (name, expr) in defs_ir1 {
         let expr_ir2 = translator2.translate(expr);
         let def_idx = translator.globals[&name].0 as usize;
         if name == toplevel.interner.get_or_intern_static("main") {
@@ -381,14 +382,13 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
             main = Some(def_idx);
         }
         translator2.globals[def_idx] = ir2::GlobalDef::ClosedExpr { body: expr_ir2 };
-        (name, expr_ir2)
-    }).collect();
+    }
 
     for (i, func) in translator2.globals.iter().enumerate() {
         println!("global {i}: {func:?}");
     }
 
-    let mut wasm_bytes = wasm::translate(&translator2.globals, main.unwrap());
+    let wasm_bytes = wasm::translate(&translator2.globals, main.unwrap());
     let orig_wasm_bytes = wasm_bytes.clone();
 
     write_file(out.as_deref(), &wasm_bytes)?;
@@ -406,12 +406,11 @@ fn run(mut wasm_bytes: Vec<u8>) {
     use wasmparser::{Chunk, Payload::*};
     let mut validator = wasmparser::Validator::new();
     let mut cur = wasmparser::Parser::new(0);
-    let mut eof = false;
     let mut stack = Vec::new();
 
     loop {
-        let (payload, consumed) = match cur.parse(&wasm_bytes, eof).unwrap() {
-            Chunk::NeedMoreData(hint) => {
+        let (payload, consumed) = match cur.parse(&wasm_bytes, false).unwrap() {
+            Chunk::NeedMoreData(_) => {
                 break;
             }
 
@@ -495,7 +494,7 @@ fn run(mut wasm_bytes: Vec<u8>) {
     for export in module.exports() {
         println!("{export:?}");
     }
-    let mut linker = wasmtime::Linker::new(&engine);
+    let linker = wasmtime::Linker::new(&engine);
     let mut store: wasmtime::Store<()> = wasmtime::Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &module).unwrap();
     /*
@@ -524,7 +523,8 @@ fn main() -> Result<(), ExitCode> {
     let pi = interner.get_or_intern_static("pi");
     let sin = interner.get_or_intern_static("sin");
     let addone = interner.get_or_intern_static("addone");
-    let reinterp = interner.get_or_intern_static("reinterp");
+    let reinterpi = interner.get_or_intern_static("reinterpi");
+    let reinterpf = interner.get_or_intern_static("reinterpf");
     let cast = interner.get_or_intern_static("cast");
     globals.insert(add, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
     globals.insert(div, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
@@ -532,7 +532,8 @@ fn main() -> Result<(), ExitCode> {
     globals.insert(pi, typing::Type::Sample);
     globals.insert(sin, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
     globals.insert(addone, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
-    globals.insert(reinterp, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
+    globals.insert(reinterpi, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
+    globals.insert(reinterpf, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Index)));
     globals.insert(cast, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
 
     let mut toplevel = TopLevel { arena: &annot_arena, interner, globals };

@@ -1,8 +1,5 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::Read;
 use std::iter;
-use std::ops::Range;
 use std::rc::Rc;
 
 use wasm::FuncType;
@@ -32,15 +29,6 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
     runtime.emit_functions(&mut functions);
     runtime.emit_globals(&mut globals_out);
 
-    let heap_global = globals_out.len();
-    globals_out.global(
-        wasm::GlobalType {
-            val_type: wasm::ValType::I32,
-            mutable: true,
-            shared: false,
-        },
-        &wasm::ConstExpr::i32_const(0)
-    );
     let bad_global = globals_out.len();
     globals_out.global(
         wasm::GlobalType {
@@ -62,7 +50,6 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
         globals_offset,
         func_table_offset: func_offset, // TODO: is this right?
         function_types: &mut function_types,
-        heap_global,
         bad_global,
         runtime_exports: &runtime.exports,
     };
@@ -76,19 +63,15 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
         }, &wasm::ConstExpr::i32_const(0));
         match def {
             GlobalDef::Func { rec, arity, env_size, body } => {
-                {
                 let mut trans = FuncTranslator::new(&mut translator, *rec, *env_size, *arity);
                 let ctx = trans.make_initial_ctx();
                 trans.translate(ctx, body);
-                if i == 12 {
-                    println!("func 12 locals: {:?}", trans.locals);
-                    println!("func 12 code: {:?}", trans.insns);
-                }
                 let (type_idx, func) = trans.finish();
                 functions.function(type_idx);
                 codes.function(&func);
 
-                init_func.instruction(&wasm::Instruction::GlobalGet(heap_global));
+                init_func.instruction(&wasm::Instruction::I32Const(8));
+                init_func.instruction(&wasm::Instruction::Call(translator.runtime_exports["alloc"].1));
                 init_func.instruction(&wasm::Instruction::LocalTee(0));
                 init_func.instruction(&wasm::Instruction::I32Const(func_offset as i32 + i as i32));
                 init_func.instruction(&wasm::Instruction::I32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
@@ -96,12 +79,7 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
                 init_func.instruction(&wasm::Instruction::I32Const(*arity as i32));
                 init_func.instruction(&wasm::Instruction::I32Store(wasm::MemArg { offset: 4, align: 2, memory_index: 0 }));
                 init_func.instruction(&wasm::Instruction::LocalGet(0));
-                init_func.instruction(&wasm::Instruction::I32Const(8));
-                init_func.instruction(&wasm::Instruction::I32Add);
-                init_func.instruction(&wasm::Instruction::GlobalSet(heap_global));
-                init_func.instruction(&wasm::Instruction::LocalGet(0));
                 init_func.instruction(&wasm::Instruction::GlobalSet(globals_offset + i as u32));
-                }
             },
             GlobalDef::ClosedExpr { body } => {
                 let mut trans = FuncTranslator::new(&mut translator, false, 0, 0);
@@ -206,7 +184,6 @@ struct Translator<'a> {
     globals_offset: u32,
     func_table_offset: u32,
     function_types: &'a mut FunctionTypes,
-    heap_global: u32,
     bad_global: u32,
     runtime_exports: &'a HashMap<String, (wasmparser::ExternalKind, u32)>,
 }

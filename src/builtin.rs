@@ -69,9 +69,12 @@ builtins!(
     addone[1]
       { &[Value::Sample(s)] => Ok(Value::Sample(s + 1.0)) }
       [ &ir2::Expr::Op(Op::FAdd, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Op(Op::Const(crate::ir1::Value::Sample(1.0)), &[])]) ],
-    reinterp[1]
+    reinterpi[1]
       { &[Value::Index(i)] => Ok(Value::Sample(f32::from_bits(i as u32))) }
       [ &ir2::Expr::Op(Op::ReinterpI2F, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+    reinterpf[1]
+      { &[Value::Sample(x)] => Ok(Value::Index(x.to_bits() as usize)) }
+      [ &ir2::Expr::Op(Op::ReinterpF2I, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
     cast[1]
       { &[Value::Index(i)] => Ok(Value::Sample(i as f32)) }
       [ &ir2::Expr::Op(Op::CastI2F, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],

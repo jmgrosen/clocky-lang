@@ -44,6 +44,7 @@ pub unsafe extern "C" fn sample(mut s: *const Stream, n: u32, out_ptr: *mut f32)
     s
 }
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     core::arch::wasm32::unreachable()
@@ -59,25 +60,25 @@ pub extern "C" fn cos(x: f32) -> f32 {
     libm::cosf(x)
 }
 
-static mut heap_ptr: *mut () = ptr::null_mut();
-static mut heap_end: *mut () = ptr::null_mut();
+static mut HEAP_PTR: *mut () = ptr::null_mut();
+static mut HEAP_END: *mut () = ptr::null_mut();
 
 // ??
 const ALLOC_SIZE_PAGES: usize = 4;
 
 #[no_mangle]
 pub unsafe extern "C" fn alloc(n: u32) -> *mut () {
-    let old_heap_ptr = heap_ptr;
-    if let Some(new_heap_ptr) = (heap_ptr as usize).checked_add(n as usize) {
-        if new_heap_ptr < heap_end as usize {
-            heap_ptr = new_heap_ptr as *mut ();
+    let old_heap_ptr = HEAP_PTR;
+    if let Some(new_heap_ptr) = (HEAP_PTR as usize).checked_add(n as usize) {
+        if new_heap_ptr < HEAP_END as usize {
+            HEAP_PTR = new_heap_ptr as *mut ();
             old_heap_ptr
         } else {
             let old_size = wasm32::memory_grow(0, ALLOC_SIZE_PAGES);
             if old_size < usize::MAX {
                 let allocation = (old_size * 65536) as *mut ();
-                heap_ptr = (old_size * 65536 + n as usize) as *mut ();
-                heap_end = ((old_size + ALLOC_SIZE_PAGES) * 65536) as *mut ();
+                HEAP_PTR = (old_size * 65536 + n as usize) as *mut ();
+                HEAP_END = ((old_size + ALLOC_SIZE_PAGES) * 65536) as *mut ();
                 allocation
             } else {
                 panic!()

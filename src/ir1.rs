@@ -70,6 +70,7 @@ pub enum Con {
 
 impl Con {
     // returns None if variable arity
+    #[allow(unused)]
     fn arity(&self) -> Option<u8> {
         match *self {
             Con::Stream => Some(2),
@@ -155,6 +156,7 @@ impl Op {
 }
 
 impl Op {
+    #[allow(unused)]
     fn arity(&self) -> Option<u8> {
         match *self {
             Op::Const(_) => Some(0),
@@ -251,6 +253,9 @@ impl<'a> fmt::Display for Expr<'a> {
 
 
 impl<'a> Expr<'a> {
+    // i don't use these? really? i guess i'll probably use them when
+    // writing optimizations
+    #[allow(unused)]
     fn shifted_by<'b>(&self, by: u32, depth: u32, arena: &'b ArenaPlus<'b, Expr<'b>>) -> Expr<'b> {
         use Expr::*;
         match *self {
@@ -281,6 +286,7 @@ impl<'a> Expr<'a> {
         }
     }
 
+    #[allow(unused)]
     fn shifted_by_signed<'b>(&self, by: i32, depth: u32, arena: &'b ArenaPlus<'b, Expr<'b>>) -> Expr<'b> {
         use Expr::*;
         match *self {
@@ -650,6 +656,7 @@ impl<'a> Translator<'a> {
     //
     // TODO: optimize allocation for when nothing is rewritten?
     // probably doing a bunch we don't need to be...
+    #[allow(unused)]
     pub fn rewrite(&self, expr: &'a Expr<'a>) -> &'a Expr<'a> {
         use Expr::*;
         match *expr {

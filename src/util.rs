@@ -56,10 +56,12 @@ impl<'a, T> ArenaPlus<'a, T> {
         }
     }
 
+    #[allow(unused)]
     pub fn alloc_slice_alloc(&self, it: impl IntoIterator<Item=T>) -> &'a [&'a T] {
         self.alloc_slice(it.into_iter().map(|e| self.alloc(e)))
     }
 
+    #[allow(unused)]
     pub fn alloc_slice_maybe(&self, it: impl IntoIterator<Item=Option<&'a T>>) -> Option<&'a [&'a T]> {
         let mut success = true;
         let slice = self.ptr_arena.alloc_extend(it.into_iter().map_while(|e| { success = e.is_some(); e }));
@@ -69,6 +71,7 @@ impl<'a, T> ArenaPlus<'a, T> {
     /// A form of alloc_slice that is reentrant: you can use the arena
     /// in the iterator. It requires the iterator to return a correct
     /// upper bound size hint.
+    #[allow(unused)]
     pub fn alloc_slice_maybe_r(&self, it: impl IntoIterator<Item=Option<&'a T>>) -> Option<&'a [&'a T]> {
         // TODO: is this safe? my gut says, "not technically but
         // probably fine in practice." this will end up with
@@ -100,6 +103,7 @@ impl<'a, T> ArenaPlus<'a, T> {
         }
     }
 
+    #[allow(unused)]
     fn alloc_slice_maybe_alloc(&self, it: impl IntoIterator<Item=Option<T>>) -> Option<&'a [&'a T]> {
         self.alloc_slice_maybe(it.into_iter().map(|oe| oe.map(|e| self.alloc(e))))
     }

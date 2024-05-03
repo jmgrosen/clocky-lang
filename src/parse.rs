@@ -99,15 +99,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
     }
 
-    pub fn parse_expr(&mut self, text: &str) -> Result<Expr<'b, tree_sitter::Range>, FullParseError> {
-        // this unwrap should be safe because we make sure to set the language and don't set a timeout or cancellation flag
-        let tree = self.parser.parse(text, None).unwrap();
-        let root_node = tree.root_node();
-        AbstractionContext { parser: self, original_text: text }
-            .parse_expr(root_node)
-            .map_err(|error| FullParseError { tree, error })
-    }
-
     pub fn parse_file(&mut self, text: &str) -> Result<SourceFile<'b, tree_sitter::Range>, FullParseError> {
         // this unwrap should be safe because we make sure to set the language and don't set a timeout or cancellation flag
         let tree = self.parser.parse(text, None).unwrap();

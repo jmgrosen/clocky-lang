@@ -61,6 +61,7 @@ pub enum Binop {
 }
 
 impl Binop {
+    #[allow(unused)]
     pub fn is_cmp(&self) -> bool {
         match *self {
             Binop::FGt => true,

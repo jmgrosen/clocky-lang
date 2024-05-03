@@ -10,7 +10,7 @@ def randi : for k : clock. index -> ~^(k) index =
     newseed :: `(!(unbox r) newseed)
 
 def convert : [](index -> sample) = box (\x.
-  reinterp (0x3F800000 .|. (x .>>. 9)) - 1.0)
+  reinterpi (0x3F800000 .|. (x .>>. 9)) - 1.0)
 
 def rands : for k : clock. index -> ~^(k) sample =
   \seed.

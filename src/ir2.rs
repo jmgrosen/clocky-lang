@@ -7,6 +7,7 @@ pub enum Expr<'a> {
     If(&'a Expr<'a>, &'a Expr<'a>, &'a Expr<'a>),
     Let(&'a [&'a Expr<'a>], &'a Expr<'a>),
     Op(Op, &'a [&'a Expr<'a>]),
+    #[allow(unused)]
     CallDirect(Global, &'a [&'a Expr<'a>]),
     CallIndirect(&'a Expr<'a>, &'a [&'a Expr<'a>]),
 }
