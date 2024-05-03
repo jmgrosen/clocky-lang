@@ -228,30 +228,6 @@ pub enum Expr<'a> {
     Adv(&'a Expr<'a>),
 }
 
-/*
-impl<'a> fmt::Display for Expr<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Expr::*;
-        // okay this time let's do something hacky and use the
-        // "precision" specified in the formatter as precedence
-        let prec = f.precision().unwrap_or(0);
-        match *self {
-            Var(i) =>
-                write!(f, "#{:?}", i),
-            Val(v) =>
-                write!(f, "{}", v),
-            Glob(Global(g)) =>
-                write!(f, "@{}", g),
-            Lam(arity, e) =>
-                parenthesize(f, prec > 0, |f| {
-                    write!(f, "\\");
-        }
-    }
-}
-*/
-
-
-
 impl<'a> Expr<'a> {
     // i don't use these? really? i guess i'll probably use them when
     // writing optimizations

@@ -154,20 +154,6 @@ impl<'a> From<std::io::Error> for TopLevelError<'a> {
     }
 }
 
-/*
-impl<'a> From<parse::FullParseError> for TopLevelError<'a> {
-    fn from(err: parse::FullParseError) -> TopLevelError<'a> {
-        TopLevelError::ParseError(err)
-    }
-}
-
-impl<'a> From<typing::TypeError<'a, tree_sitter::Range>> for TopLevelError<'a> {
-    fn from(err: typing::TypeError<'a, tree_sitter::Range>) -> TopLevelError<'a> {
-        TopLevelError::TypeError(err)
-    }
-}
-*/
-
 impl<'a> From<hound::Error> for TopLevelError<'a> {
     fn from(err: hound::Error) -> TopLevelError<'a> {
         TopLevelError::WavError(err)
@@ -497,12 +483,6 @@ fn run(mut wasm_bytes: Vec<u8>) {
     let linker = wasmtime::Linker::new(&engine);
     let mut store: wasmtime::Store<()> = wasmtime::Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &module).unwrap();
-    /*
-    let main = instance.get_typed_func::<i32, i32>(&mut store, "main").unwrap();
-
-    let res = main.call(&mut store, 0).unwrap();
-    println!("res: {res}");
-     */
     println!("main: {:?}", instance.get_global(&mut store, "main").unwrap().get(&mut store));
 }
 
@@ -557,73 +537,4 @@ fn main() -> Result<(), ExitCode> {
     }
 
     Ok(())
-
-    /*
-    // don't ask why i have to use a String here instead of &str
-    let mut try_typing = |code: String| {
-        let mut parser = Parser::new(&mut interner, &annot_arena);
-        let expr = match parser.parse(&code[..]) {
-            Ok(e) => e,
-            Err(err) => {
-                println!("parse error: {:?}", err);
-                return;
-            },
-        };
-        println!("{}", expr.pretty(&interner));
-        match typing::synthesize(&ctx, &expr) {
-            Ok(ty) => println!("synthesized type: {}", ty),
-            Err(err) => println!("type error: {}", err.pretty(&interner, &code[..])),
-        }
-    };
-
-    for line in std::io::stdin().lines() {
-        let line = line?;
-        try_typing(line);
-        // println!("{}", line);
-    }
-
-    Ok(())
-    */
-
-    /*
-    try_typing(r"(\x. x) : index -> unit");
-    try_typing(r"(\x. x) : sample -> sample");
-    try_typing(r"(\x. y) : sample -> sample");
-    try_typing(r"((\x. x) : sample -> sample) 3");
-    try_typing(r"((\x. x) : sample -> sample) 1.5");
-    try_typing(r"1.5 2");
-    try_typing(r"1.5");
-
-    try_typing(r"(&s. !s) : sample");
-    // try_typing(r"(&f. \x. ");
-    try_typing(r"((&s. ((\x. x :: !s (add x 1.0)) : sample -> ~sample)) : sample -> ~sample) 0.0");
-
-    let source_code = r"let pifourth = div pi 4.0 in ((&s. \x. sin x :: !s (add x pifourth)) : sample -> ~sample) 0.0";
-    try_typing(source_code);
-
-    try_typing(r"let foo = ((2.0, 3) : sample * index) in (let (x, y) = foo in x)");
-
-    let source_code = r"let persamp = (div (mul 440.0 (mul 2.0 pi)) 48000.0) in ((&s. \x. sin x :: !s (add x persamp)) : sample -> ~sample) 0.0";
-    */
-
-    /*
-
-    let expr = parser.parse(source_code).unwrap();
-    println!("\n{}", expr.pretty(&interner));
-
-    let arena = Arena::new();
-    let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
-
-    // println!("{:?}", interp(&Env::new(), &expr_unannotated));
-
-    let builtins = make_builtins(&mut interner);
-
-    let mut samples = [0f32; 48000];
-    let before = Instant::now();
-    let result = get_samples(&builtins, &expr_unannotated, &mut samples[..]);
-    let elapsed = before.elapsed();
-    println!("\n{:?}", result);
-    // println!("{samples:?}");
-    println!("took {}ms", elapsed.as_millis());
-    */
 }

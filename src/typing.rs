@@ -56,8 +56,8 @@ impl Clock {
         Clock { coeff: One::one(), var }
     }
 
-    /*
     // TODO: figure out better name for this
+    #[allow(unused)]
     pub fn compose(&self, other: &Clock) -> Option<Clock> {
         if self.var == other.var {
             Some(Clock { coeff: (self.coeff.recip() + other.coeff.recip()).recip(), var: self.var })
@@ -65,7 +65,6 @@ impl Clock {
             None
         }
     }
-    */
 
     // TODO: figure out better name for this
     pub fn uncompose(&self, other: &Clock) -> Option<Clock> {
@@ -621,12 +620,6 @@ impl<'a, R> PrettyTypeError<'a, R> {
     fn for_error(&self, error: &'a TypeError<'a, R>) -> PrettyTypeError<'a, R> {
         PrettyTypeError { interner: self.interner, program_text: self.program_text, error }
     }
-
-    /*
-    fn for_expr(&self, expr: &'a Expr<'a, R>) -> PrettyExpr<'a, 'a, R> {
-        expr.pretty(self.interner)
-    }
-    */
 
     fn for_expr(&self, expr: &'a Expr<'a, tree_sitter::Range>) -> &'a str {
         let range = expr.range();

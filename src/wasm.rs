@@ -441,18 +441,12 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 // TODO: is this the right order?
                 //
                 self.translate(ctx.clone(), e1);
-                // e1
                 self.translate(ctx, e2);
-                // e1 e2
                 self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-                // e1 *e2
                 let t0 = self.temp(wasm::ValType::I32, 0);
                 self.insns.push(wasm::Instruction::LocalSet(t0));
-                // e1
                 self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-                // *e1
                 self.insns.push(wasm::Instruction::LocalGet(t0));
-                // *e1 *e2
                 self.insns.push(match op {
                     Op::IAdd => wasm::Instruction::I32Add,
                     Op::ISub => wasm::Instruction::I32Sub,
@@ -465,22 +459,14 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     Op::Or => wasm::Instruction::I32Or,
                     _ => unreachable!()
                 });
-                // *res
                 self.insns.push(wasm::Instruction::LocalSet(t0));
-                //
                 self.insns.push(wasm::Instruction::I32Const(4));
-                // 4
                 self.alloc();
-                // res
                 let t1 = self.temp(wasm::ValType::I32, 1);
                 self.insns.push(wasm::Instruction::LocalTee(t1));
-                // res
                 self.insns.push(wasm::Instruction::LocalGet(t0));
-                // res *res
                 self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
-                //
                 self.insns.push(wasm::Instruction::LocalGet(t1));
-                // res
             },
             (Op::IGt | Op::IGe | Op::ILt | Op::ILe | Op::IEq | Op::INe, &[e1, e2]) => {
                 // TODO: is this the right order?

@@ -78,9 +78,6 @@ builtins!(
     cast[1]
       { &[Value::Index(i)] => Ok(Value::Sample(i as f32)) }
       [ &ir2::Expr::Op(Op::CastI2F, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
-    // sub[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 - s2)) },
-    // mul[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 * s2)) },
-    // div[2] { &[Value::Sample(s1), Value::Sample(s2)] => Ok(Value::Sample(s1 / s2)) }
 );
 
 pub type BuiltinsMap = HashMap<Symbol, Builtin>;
