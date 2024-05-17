@@ -4,7 +4,7 @@ passed=0
 failed=0
 
 for f in tests/accept/*.cky; do
-    if target/release/clocky-lang typecheck "$f" >/dev/null 2>/dev/null; then
+    if target/release/clocky typecheck "$f" >/dev/null 2>/dev/null; then
         echo "passed: $f"
         passed=$(( passed + 1))
     else
@@ -14,7 +14,7 @@ for f in tests/accept/*.cky; do
 done
 
 for f in tests/reject/*.cky; do
-    if target/release/clocky-lang typecheck "$f" >/dev/null 2>/dev/null; then
+    if target/release/clocky typecheck "$f" >/dev/null 2>/dev/null; then
         echo "failed: $f"
         failed=$(( failed + 1))
     else
