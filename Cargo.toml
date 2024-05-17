@@ -13,7 +13,7 @@ cc="*"
 clap = { version = "4.5.4", features = ["derive"] }
 hound = "3.5.1"
 string-interner = "0.15"
-tree-sitter = "0.20"
+tree-sitter = { package = "tree-sitter-c2rust", version = "0.20" }
 tree-sitter-clocky = { path = "tree-sitter-clocky" }
 typed-arena = "2.0.2"
 num = "0.4"
@@ -30,7 +30,8 @@ default = ["run"]
 run = ["dep:wasmtime"]
 
 [profile.release]
-debug = true
+debug = false
+lto = true
 
 [[bin]]
 name = "clocky"

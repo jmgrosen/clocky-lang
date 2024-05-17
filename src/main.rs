@@ -172,6 +172,7 @@ fn cmd_parse<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, dump_to: Op
             eprintln!("{:?}", error);
             if let Some(dump_path) = dump_to {
                 let dump_file = File::create(dump_path)?;
+                #[cfg(not(target_arch = "wasm32"))]
                 tree.print_dot_graph(&dump_file);
             }
         },

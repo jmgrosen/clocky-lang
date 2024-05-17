@@ -19,6 +19,13 @@ fn main() {
     println!("cargo:rerun-if-changed={}", scanner_path.to_str().unwrap());
     */
 
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+    println!("cargo:info=arch is {arch}");
+    if arch == "wasm32" {
+        println!("cargo:info=using wasm_build_tool");
+        tree_sitter_wasm_build_tool::add_wasm_headers(&mut c_config).unwrap();
+    }
+
     c_config.compile("parser");
     println!("cargo:rerun-if-changed={}", parser_path.to_str().unwrap());
 
