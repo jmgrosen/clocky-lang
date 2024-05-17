@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::{collections::HashMap, path::PathBuf, fs::File};
 use std::io::{Read, Write};
 
-use expr::{Expr, Symbol};
+use clocky::expr::{Expr, Symbol};
 use num::One;
 use string_interner::{StringInterner, DefaultStringInterner};
 
@@ -13,23 +13,13 @@ use typed_arena::Arena;
 
 use clap::Parser as CliParser;
 
-mod expr;
-mod builtin;
-mod parse;
-mod interp;
-mod typing;
-mod ir1;
-mod ir2;
-mod util;
-mod wasm;
-mod runtime;
+use clocky::builtin::make_builtins;
+use clocky::interp::get_samples;
+use clocky::parse::{self, Parser};
+use clocky::typing::{self, Globals, Typechecker, Ctx};
+use clocky::{ir1, ir2, interp, wasm, util};
 
-use builtin::make_builtins;
-use interp::get_samples;
-use parse::Parser;
-use typing::{Globals, Typechecker, Ctx};
-
-use crate::typing::{Type, TopLevelTypeError, Kind, Clock};
+use clocky::typing::{Type, TopLevelTypeError, Kind, Clock};
 
 #[derive(CliParser, Debug)]
 struct Args {

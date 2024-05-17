@@ -33,6 +33,10 @@ run = ["dep:wasmtime"]
 debug = false
 lto = true
 
+[lib]
+name = "clocky"
+path = "src/lib.rs"
+
 [[bin]]
 name = "clocky"
 path = "src/main.rs"
