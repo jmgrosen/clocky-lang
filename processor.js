@@ -1,27 +1,19 @@
-/*
-let stream = instance.exports.main;
-const num_samples = 1000;
-const samples_ptr = instance.exports.sample(stream, num_samples);
-const mem_f32 = new Float32Array(instance.exports.memory.buffer);
-const mem_i32 = new Uint32Array(instance.exports.memory.buffer);
-const samples = mem_f32.slice(samples_ptr/4, samples_ptr/4 + num_samples);
-console.log(samples);
-*/
-
 class ClockyStreamProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     this.instance = null;
     this.stream = null;
     this.sample_out = null;
-    this.first = true;
+    this.first = null;
     console.log("created");
 
     this.port.onmessage = (event) => {
       console.log("messaged");
+      this.instance = null;
       WebAssembly.instantiate(event.data.clockyModule).then(({instance}) => {
         console.log("instantiated");
         this.instance = instance;
+        this.first = true;
         this.stream = instance.exports.main;
         this.samples_ptr = instance.exports.alloc(4 * 128);
       });

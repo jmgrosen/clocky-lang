@@ -14,6 +14,77 @@
     </style>
   </head>
   <body style="width: 100%; height: 100%" >
-    <button style="width: 100%; height: 100%; font-size: 120pt">start</button>
+    <textarea id="code" rows="20" cols="80">
+def map : for a : type. for b : type. for k : clock.
+  [](a -> b) -> ~^(k) a -> ~^(k) b =
+  \f. &^(k) r. \s.
+    let (x, sp) = %s in
+    unbox f x :: `(!(unbox r) !sp)
+
+def randi : for k : clock. index -> ~^(k) index =
+  &^(k) r. \seed.
+    let newseed = seed .*. 196314165 .+. 907633515 in
+    newseed :: `(!(unbox r) newseed)
+
+def convert : [](index -> sample) = box (\x.
+  reinterpi (0x3F800000 .|. (x .>>. 9)) - 1.0)
+
+def rands : for k : clock. index -> ~^(k) sample =
+  \seed.
+    (map $(index) $(sample) @(k) convert (randi @(k) seed))
+
+def phasor : for k : clock. sample -> ~^(k) sample =
+  \delta. ((&^(k) phasor. \phase.
+    let prenewphase = phase + delta in
+    let newphase = case prenewphase <= 1.0 {
+                     inl x => prenewphase
+                   | inr x => prenewphase - 1.0
+                   } in
+    phase :: `(!(unbox phasor) newphase)) : sample -> ~^(k) sample) 0.0
+
+def zipwith : for a : type. for b : type. for c : type. for k : clock.
+  [](a -> b -> c) -> ~^(k) a -> ~^(k) b -> ~^(k) c =
+  \f. &^(k) sum. \s1. \s2.
+    let (x1, s1p) = %s1 in
+    let (x2, s2p) = %s2 in
+    unbox f x1 x2 :: `(!(unbox sum) !s1p !s2p)
+
+def sum : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
+  zipwith $(sample) $(sample) $(sample) @(k) (box (\x1. \x2. x1 + x2))
+
+def product : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
+  zipwith $(sample) $(sample) $(sample) @(k) (box (\x1. \x2. x1 * x2))
+
+def abs : [](sample -> sample) =
+  box (\x. case x > 0.0 {
+             inl y => x
+           | inr y => 0.0 - x
+           })
+
+def amp : [](sample -> sample) =
+  box (\x.
+    let y = sin (2. * 3.14159 * x) in
+    (unbox abs (y * y * y)) * 0.8 + 0.2)
+
+def maps : for k : clock. [](sample -> sample) -> ~^(k) sample -> ~^(k) sample =
+  map $(sample) $(sample) @(k)
+
+def onepole : for k : clock. sample -> ~^(k) sample -> |>^(k) ~^(k) sample =
+  \factor. \s.
+    let (initial, sp) = %s in
+    `(((&^(k) op. \acc. \spp.
+          let (x, sppp) = %spp in
+          let out = x * factor + acc * (1. - factor) in
+          out :: `(!(unbox op) out !sppp)) : sample -> ~^(k) sample -> ~^(k) sample) initial !sp)
+
+def wavesunfiltered : for k : clock. ~^(k) sample =
+  product @(k)
+    (maps @(k) amp (phasor @(k) (0.1 / 48000.)))
+    (maps @(k) (box (\x. x - 0.5)) (rands @(k) 1337))
+
+def main : for k : clock. ~^(k) sample =
+  0. :: `(!(onepole @(k) 0.4 (wavesunfiltered @(k))))</textarea>
+    <div id="status">not running</div>
+    <button style="font-size: 48pt">send it</button>
   </body>
 </html>
