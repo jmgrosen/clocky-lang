@@ -1,0 +1,24 @@
+{
+  "name": "sketchzone-clocky",
+  "version": "0.0.0",
+  "description": "Sketchzone for clocky",
+  "scripts": {
+    "start": "vite",
+    "build": "vite build",
+    "serve": "vite preview"
+  },
+  "engines": {
+    "node": "16.x"
+  },
+  "devDependencies": {
+    "sketchzone": "^0.0.11",
+    "vite": "^4.0.0",
+    "vite-plugin-wasm": "^3.3.0"
+  },
+  "glitch": {
+    "projectType": "generated_static"
+  },
+  "dependencies": {
+    "vite-plugin-top-level-await": "^1.4.1"
+  }
+}
