@@ -8,7 +8,7 @@ use num::{One, rational::Ratio};
 use string_interner::DefaultStringInterner;
 use indenter::{Format, indented, Indented};
 
-use crate::expr::{Binop, Expr, SourceFile, Symbol, Value};
+use crate::expr::{Binop, Expr, SourceFile, Symbol, TopLevelDefKind, Value};
 use crate::util::parenthesize;
 
 // eventually this will get more complicated...
@@ -731,7 +731,7 @@ impl<'a> fmt::Display for PrettyTypeError<'a, tree_sitter::Range> {
 }
 
 pub struct Typechecker<'a> {
-    pub globals: &'a Globals,
+    pub globals: &'a mut Globals,
     pub interner: &'a mut DefaultStringInterner,
 }
 
@@ -1081,15 +1081,26 @@ impl<'a> Typechecker<'a> {
 
     pub fn check_file<'c, 'b, R: Clone>(&mut self, file: &'c SourceFile<'b, R>) -> Result<(), FileTypeErrors<'b, R>> {
         let mut errs = Vec::new();
-        let mut ctx = Ctx::Empty;
+        let mut running_ctx = Ctx::Empty;
         for def in file.defs.iter() {
-            if let Err(err) = self.check(&ctx, &def.body, &def.type_) {
+            let ctx = match def.kind {
+                TopLevelDefKind::Let => &running_ctx,
+                TopLevelDefKind::Def => &Ctx::Empty,
+            };
+            if let Err(err) = self.check(ctx, &def.body, &def.type_) {
                 errs.push(TopLevelTypeError::TypeError(def.name, err));
             }
-            if ctx.lookup_term_var(def.name).is_some() {
+            if running_ctx.lookup_term_var(def.name).is_some() ||
+                self.globals.get(&def.name).is_some() {
                 errs.push(TopLevelTypeError::CannotRedefine(def.name, def.range.clone()));
-            } else {
-                ctx = Ctx::TermVar(def.name, def.type_.clone(), Rc::new(ctx));
+            }
+            match def.kind {
+                TopLevelDefKind::Let => {
+                    running_ctx = Ctx::TermVar(def.name, def.type_.clone(), Rc::new(running_ctx));
+                },
+                TopLevelDefKind::Def => {
+                    self.globals.insert(def.name, def.type_.clone());
+                },
             }
         }
 

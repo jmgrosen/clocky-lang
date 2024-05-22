@@ -1,6 +1,6 @@
 def sinsig: for k : clock. ~^(k) sample -> ~^(k) sample =
   ((&^(k) sinsig. \sigin.
     let (x, siginp) = %sigin in
-    sin x :: `(!(unbox sinsig) !siginp)))
-def persamp: sample = (div (mul 440.0 (mul 2.0 pi)) 48000.0)
-def lin: for k : clock. ~^(k) sample = ((&^(k) s. \x. x :: `(!(unbox s) (add x persamp))) : sample -> ~^(k) sample) 0.0
+    sin x :: `(!(unbox sinsig) !siginp)));;
+def persamp: sample = (div (mul 440.0 (mul 2.0 pi)) 48000.0);;
+def lin: for k : clock. ~^(k) sample = ((&^(k) s. \x. x :: `(!(unbox s) (add x persamp))) : sample -> ~^(k) sample) 0.0;;

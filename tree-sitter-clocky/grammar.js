@@ -2,9 +2,10 @@ module.exports = grammar({
     name: 'clocky',
 
     rules: {
-        source_file: $ => repeat1($.top_level_def),
+        source_file: $ => repeat1(choice($.top_level_def, $.top_level_let)),
 
-        top_level_def: $ => seq('def', $.identifier, ':', $.type, '=', $.expression),
+        top_level_def: $ => seq('def', $.identifier, ':', $.type, '=', $.expression, ';;'),
+        top_level_let: $ => seq('let', $.identifier, ':', $.type, '=', $.expression, ';;'),
 
         expression: $ => choice(
             $.wrap_expression,

@@ -36,7 +36,7 @@ impl<'a> TopLevel<'a> {
     }
 
     fn make_typechecker<'b>(&'b mut self) -> Typechecker<'b> {
-        Typechecker { globals: &self.globals, interner: &mut self.interner }
+        Typechecker { globals: &mut self.globals, interner: &mut self.interner }
     }
 }
 

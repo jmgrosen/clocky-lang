@@ -253,8 +253,15 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum TopLevelDefKind {
+    Let,
+    Def,
+}
+
 #[derive(Clone, Debug)]
 pub struct TopLevelDef<'a, R> {
+    pub kind: TopLevelDefKind,
     pub name: Symbol,
     pub type_: Type,
     pub body: &'a Expr<'a, R>,

@@ -8,6 +8,6 @@ def batch2helper: for k : clock.
          (\x0. \s1.
             let (x1, s2) = %s1 in
             [x0, x1] :: (`((let (b, h) = !(unbox bh) in b) !s2))
-                         : |>^(2k) |>^(2k) ~^(k) [sample; 2])))
+                         : |>^(2k) |>^(2k) ~^(k) [sample; 2])));;
 def batch2: for k : clock. ~^(2k) sample -> |>^(2k) ~^(k) [sample; 2] =
-  let (b, h) = batch2helper @(k) in b
+  let (b, h) = batch2helper @(k) in b;;

@@ -2,7 +2,7 @@ use string_interner::DefaultStringInterner;
 use typed_arena::Arena;
 use num::rational::Ratio;
 
-use crate::{expr::{Binop, Expr, SourceFile, Symbol, TopLevelDef, Value}, typing::{Type, ArraySize, Clock, Kind}};
+use crate::{expr::{Binop, Expr, SourceFile, Symbol, TopLevelDef, TopLevelDefKind, Value}, typing::{Type, ArraySize, Clock, Kind}};
 
 macro_rules! make_node_enum {
     ($enum_name:ident { $($rust_name:ident : $ts_name:ident),* } with matcher $matcher_name:ident) => {
@@ -35,6 +35,7 @@ macro_rules! make_node_enum {
 make_node_enum!(ConcreteNode {
     SourceFile: source_file,
     TopLevelDef: top_level_def,
+    TopLevelLet: top_level_let,
     Expression: expression,
     WrapExpression: wrap_expression,
     Identifier: identifier,
@@ -163,12 +164,15 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
     }
 
     fn parse_top_level_let<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<TopLevelDef<'b, tree_sitter::Range>, ParseError> {
-        let Some(ConcreteNode::TopLevelDef) = self.parser.node_matcher.lookup(node.kind_id()) else {
-            return Err(ParseError::UhhhhhhWhat(node.range(), "expected a top-level let here".to_string()));
+        let kind = match self.parser.node_matcher.lookup(node.kind_id()) {
+            Some(ConcreteNode::TopLevelDef) => TopLevelDefKind::Def,
+            Some(ConcreteNode::TopLevelLet) => TopLevelDefKind::Let,
+            _ => return Err(ParseError::UhhhhhhWhat(node.range(), "expected a top-level let here".to_string()))
         };
 
         let body = self.parse_expr(node.child(5).unwrap())?;
         Ok(TopLevelDef {
+            kind,
             name: self.identifier(node.child(1).unwrap()),
             type_: self.parse_type(node.child(3).unwrap())?,
             body: self.alloc(body),

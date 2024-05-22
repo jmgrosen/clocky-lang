@@ -575,6 +575,10 @@
         {
           "type": "top_level_def",
           "named": true
+        },
+        {
+          "type": "top_level_let",
+          "named": true
         }
       ]
     }
@@ -615,6 +619,29 @@
   },
   {
     "type": "top_level_def",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "expression",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "type",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "top_level_let",
     "named": true,
     "fields": {},
     "children": {
@@ -951,6 +978,10 @@
   },
   {
     "type": ";",
+    "named": false
+  },
+  {
+    "type": ";;",
     "named": false
   },
   {
