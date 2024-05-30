@@ -31,6 +31,40 @@ macro_rules! make_node_enum {
     };
 }
 
+macro_rules! count {
+    ( ) => { 0 };
+    ( $x:ident ) => { 1 };
+    ( $x:ident, $($y:ident),* ) => {1 + count!($($y),*) }
+}
+
+macro_rules! make_field_enum {
+    ($enum_name:ident { $($rust_name:ident : $ts_name:ident),* } with matcher $matcher_name:ident) => {
+        #[derive(PartialEq, Eq, Debug, Copy, Clone)]
+        #[repr(u16)]
+        enum $enum_name {
+            $( $rust_name ),*
+        }
+
+        pub struct $matcher_name {
+            field_id_table: [u16; count!($($rust_name),*)],
+        }
+
+        impl $matcher_name {
+            fn new(lang: &tree_sitter::Language) -> $matcher_name {
+                $matcher_name {
+                    field_id_table: [
+                        $( lang.field_id_for_name(stringify!($ts_name)).expect(concat!("could not find field name ", stringify!($ts_name))) ),*
+                    ]
+                }
+            }
+
+            fn lookup(&self, field: $enum_name) -> u16 {
+                self.field_id_table[field as usize]
+            }
+        }
+    };
+}
+
 // why isn't this information in the generated bindings...?
 make_node_enum!(ConcreteNode {
     SourceFile: source_file,
@@ -78,9 +112,37 @@ make_node_enum!(ConcreteNode {
     Kind: kind
 } with matcher ConcreteNodeMatcher);
 
+make_field_enum!(Field {
+    Ident: ident,
+    Type: type,
+    Expr: expr,
+    Func: func,
+    Arg: arg,
+    Binder: binder,
+    Body: body,
+    Clock: clock,
+    Head: head,
+    Tail: tail,
+    Bound: bound,
+    Scrutinee: scrutinee,
+    BinderLeft: binderleft,
+    BodyLeft: bodyleft,
+    BinderRight: binderright,
+    BodyRight: bodyright,
+    Inner: inner,
+    Left: left,
+    Right: right,
+    Op: op,
+    Ret: ret,
+    Size: size,
+    Coeff: coeff,
+    Kind: kind
+} with matcher ConcreteFieldMatcher);
+
 pub struct Parser<'a, 'b> {
     parser: tree_sitter::Parser,
     node_matcher: ConcreteNodeMatcher,
+    field_matcher: ConcreteFieldMatcher,
     pub interner: &'a mut DefaultStringInterner,
     pub arena: &'b Arena<Expr<'b, tree_sitter::Range>>,
 }
@@ -90,11 +152,13 @@ impl<'a, 'b> Parser<'a, 'b> {
         let mut parser = tree_sitter::Parser::new();
         let lang = tree_sitter_clocky::language();
         let node_matcher = ConcreteNodeMatcher::new(&lang);
+        let field_matcher = ConcreteFieldMatcher::new(&lang);
         parser.set_language(lang).expect("Error loading clocky grammar");
 
         Parser {
             parser,
             node_matcher,
+            field_matcher,
             interner,
             arena,
         }
@@ -145,6 +209,15 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
         self.parser.interner.get_or_intern(self.node_text(node))
     }
 
+    fn field_opt<'d>(&self, node: tree_sitter::Node<'d>, field: Field) -> Option<tree_sitter::Node<'d>> {
+        node.child_by_field_id(self.parser.field_matcher.lookup(field))
+    }
+
+    fn field<'d>(&self, node: tree_sitter::Node<'d>, field: Field) -> tree_sitter::Node<'d> {
+        self.field_opt(node, field)
+            .unwrap_or_else(|| panic!("node {:?} did not have field {:?}", node, field))
+    }
+
     fn parse_file<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<SourceFile<'b, tree_sitter::Range>, ParseError> {
         let Some(ConcreteNode::SourceFile) = self.parser.node_matcher.lookup(node.kind_id()) else {
             return Err(ParseError::UhhhhhhWhat(node.range(), "you didn't pass me a file".to_string()));
@@ -154,7 +227,10 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
         let mut cur = node.walk();
         cur.goto_first_child();
         loop {
-            defs.push(self.parse_top_level_let(cur.node())?);
+            let node = cur.node();
+            if !node.is_extra() {
+                defs.push(self.parse_top_level_let(node)?);
+            }
             if !cur.goto_next_sibling() {
                 break;
             }
@@ -170,11 +246,11 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             _ => return Err(ParseError::UhhhhhhWhat(node.range(), "expected a top-level let here".to_string()))
         };
 
-        let body = self.parse_expr(node.child(5).unwrap())?;
+        let body = self.parse_expr(self.field(node, Field::Body))?;
         Ok(TopLevelDef {
             kind,
-            name: self.identifier(node.child(1).unwrap()),
-            type_: self.parse_type(node.child(3).unwrap())?,
+            name: self.identifier(self.field(node, Field::Ident)),
+            type_: self.parse_type(self.field(node, Field::Type))?,
             body: self.alloc(body),
             range: node.range(),
         })
@@ -187,7 +263,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 self.parse_expr(node.child(0).unwrap()),
             Some(ConcreteNode::WrapExpression) =>
                 // the literals are included in the children indices
-                self.parse_expr(node.child(1).unwrap()),
+                self.parse_expr(self.field(node, Field::Expr)),
             Some(ConcreteNode::Identifier) => {
                 let interned_ident = self.parser.interner.get_or_intern(self.node_text(node));
                 Ok(Expr::Var(node.range(), interned_ident))
@@ -207,131 +283,117 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 Ok(Expr::Val(node.range(), Value::Sample(sample)))
             },
             Some(ConcreteNode::ApplicationExpression) => {
-                let e1 = self.parse_expr(node.child(0).unwrap())?;
-                let e2 = self.parse_expr(node.child(1).unwrap())?;
+                let e1 = self.parse_expr(self.field(node, Field::Func))?;
+                let e2 = self.parse_expr(self.field(node, Field::Arg))?;
                 Ok(Expr::App(node.range(), self.parser.arena.alloc(e1), self.parser.arena.alloc(e2)))
             },
             Some(ConcreteNode::LambdaExpression) => {
-                let x = self.parser.interner.get_or_intern(self.node_text(node.child(1).unwrap()));
-                let e = self.parse_expr(node.child(3).unwrap())?;
+                let x = self.parser.interner.get_or_intern(self.node_text(self.field(node, Field::Binder)));
+                let e = self.parse_expr(self.field(node, Field::Body))?;
                 Ok(Expr::Lam(node.range(), x, self.parser.arena.alloc(e)))
             },
             Some(ConcreteNode::LobExpression) => {
-                let clock = self.parse_clock(node.child(3).unwrap())?;
-                let x = self.parser.interner.get_or_intern(self.node_text(node.child(5).unwrap()));
-                let e = self.parse_expr(node.child(7).unwrap())?;
+                let clock = self.parse_clock(self.field(node, Field::Clock))?;
+                let x = self.parser.interner.get_or_intern(self.node_text(self.field(node, Field::Binder)));
+                let e = self.parse_expr(self.field(node, Field::Body))?;
                 Ok(Expr::Lob(node.range(), clock, x, self.parser.arena.alloc(e)))
             },
             Some(ConcreteNode::ForceExpression) => {
-                let e = self.parse_expr(node.child(1).unwrap())?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
                 Ok(Expr::Adv(node.range(), self.parser.arena.alloc(e)))
             },
             Some(ConcreteNode::GenExpression) => {
-                let e1 = self.parse_expr(node.child(0).unwrap())?;
-                let e2 = self.parse_expr(node.child(2).unwrap())?;
+                let e1 = self.parse_expr(self.field(node, Field::Head))?;
+                let e2 = self.parse_expr(self.field(node, Field::Tail))?;
                 Ok(Expr::Gen(node.range(), self.parser.arena.alloc(e1), self.parser.arena.alloc(e2)))
             },
             Some(ConcreteNode::LetExpression) => {
-                let x = self.parser.interner.get_or_intern(self.node_text(node.child(1).unwrap()));
-                let (ty, e1_idx, e2_idx) = match node.child_count() {
-                    6 => (None, 3, 5),
-                    8 => {
-                        let ty = self.parse_type(node.child(3).unwrap())?;
-                        (Some(ty), 5, 7)
-                    },
-                    n => {
-                        let msg = format!("how does a let expression have {} children??", n);
-                        return Err(ParseError::UhhhhhhWhat(node.range(), msg));
-                    },
-                };
-                let e1 = self.parse_expr(node.child(e1_idx).unwrap())?;
-                let e2 = self.parse_expr(node.child(e2_idx).unwrap())?;
+                let x = self.parser.interner.get_or_intern(self.node_text(self.field(node, Field::Binder)));
+                let ty = self.field_opt(node, Field::Type).map(|t| self.parse_type(t)).transpose()?;
+                let e1 = self.parse_expr(self.field(node, Field::Bound))?;
+                let e2 = self.parse_expr(self.field(node, Field::Body))?;
                 Ok(Expr::LetIn(node.range(), x, ty, self.parser.arena.alloc(e1), self.parser.arena.alloc(e2)))
             },
             Some(ConcreteNode::AnnotateExpression) => {
-                let e = self.parse_expr(node.child(0).unwrap())?;
-                let ty = self.parse_type(node.child(2).unwrap())?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
+                let ty = self.parse_type(self.field(node, Field::Type))?;
                 Ok(Expr::Annotate(node.range(), self.parser.arena.alloc(e), ty))
             },
             Some(ConcreteNode::PairExpression) => {
-                let e1 = self.parse_expr(node.child(1).unwrap())?;
-                let e2 = self.parse_expr(node.child(3).unwrap())?;
+                let e1 = self.parse_expr(self.field(node, Field::Left))?;
+                let e2 = self.parse_expr(self.field(node, Field::Right))?;
                 Ok(Expr::Pair(node.range(), self.alloc(e1), self.alloc(e2)))
             },
             Some(ConcreteNode::UnPairExpression) => {
-                let x1 = self.identifier(node.child(2).unwrap());
-                let x2 = self.identifier(node.child(4).unwrap());
-                let e0 = self.parse_expr(node.child(7).unwrap())?;
-                let e = self.parse_expr(node.child(9).unwrap())?;
+                let x1 = self.identifier(self.field(node, Field::BinderLeft));
+                let x2 = self.identifier(self.field(node, Field::BinderRight));
+                let e0 = self.parse_expr(self.field(node, Field::Bound))?;
+                let e = self.parse_expr(self.field(node, Field::Body))?;
                 Ok(Expr::UnPair(node.range(), x1, x2, self.alloc(e0), self.alloc(e)))
             },
             Some(ConcreteNode::InLExpression) => {
-                let e = self.parse_expr(node.child(1).unwrap())?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
                 Ok(Expr::InL(node.range(), self.alloc(e)))
             },
             Some(ConcreteNode::InRExpression) => {
-                let e = self.parse_expr(node.child(1).unwrap())?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
                 Ok(Expr::InR(node.range(), self.alloc(e)))
             },
             Some(ConcreteNode::CaseExpression) => {
-                let e0 = self.parse_expr(node.child(1).unwrap())?;
-                let x1 = self.identifier(node.child(4).unwrap());
-                let e1 = self.parse_expr(node.child(6).unwrap())?;
-                let x2 = self.identifier(node.child(9).unwrap());
-                let e2 = self.parse_expr(node.child(11).unwrap())?;
+                let e0 = self.parse_expr(self.field(node, Field::Scrutinee))?;
+                let x1 = self.identifier(self.field(node, Field::BinderLeft));
+                let e1 = self.parse_expr(self.field(node, Field::BodyLeft))?;
+                let x2 = self.identifier(self.field(node, Field::BinderRight));
+                let e2 = self.parse_expr(self.field(node, Field::BodyRight))?;
                 Ok(Expr::Case(node.range(), self.alloc(e0), x1, self.alloc(e1), x2, self.alloc(e2)))
             },
             Some(ConcreteNode::ArrayExpression) => {
-                Ok(Expr::Array(node.range(),
-                    if node.child_count() == 2 {
-                        [].into()
-                    } else {
-                        let array_inner = node.child(1).unwrap();
+                Ok(Expr::Array(node.range(), match self.field_opt(node, Field::Inner) {
+                    Some(array_inner) => {
                         let mut es = Vec::with_capacity((array_inner.child_count() + 1) / 2);
                         let mut cur = array_inner.walk();
-                        cur.goto_first_child();
-                        loop {
-                            let e = self.parse_expr(cur.node())?;
-                            es.push(self.alloc(e));
-                            cur.goto_next_sibling();
-                            if !cur.goto_next_sibling() {
-                                break;
-                            }
+                        let expr_field = self.parser.field_matcher.lookup(Field::Expr);
+                        for elem_node in array_inner.children_by_field_id(expr_field, &mut cur) {
+                            let elem = self.parse_expr(elem_node)?;
+                            es.push(self.alloc(elem));
                         }
                         es.into()
-                    }))
+                    },
+                    None =>
+                        [].into(),
+                }))
             },
             Some(ConcreteNode::UnGenExpression) => {
-                let e = self.parse_expr(node.child(1).unwrap())?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
                 Ok(Expr::UnGen(node.range(), self.parser.arena.alloc(e)))
             },
             Some(ConcreteNode::UnitExpression) =>
                 Ok(Expr::Val(node.range(), Value::Unit)),
             Some(ConcreteNode::DelayExpression) => {
-                let e = self.parse_expr(node.child(1).unwrap())?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
                 Ok(Expr::Delay(node.range(), self.alloc(e)))
             },
             Some(ConcreteNode::BoxExpression) => {
-                let e = self.parse_expr(node.child(1).unwrap())?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
                 Ok(Expr::Box(node.range(), self.alloc(e)))
             },
             Some(ConcreteNode::UnboxExpression) => {
-                let e = self.parse_expr(node.child(1).unwrap())?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
                 Ok(Expr::Unbox(node.range(), self.alloc(e)))
             },
             Some(ConcreteNode::ClockAppExpression) => {
-                let e = self.parse_expr(node.child(0).unwrap())?;
-                let clock = self.parse_clock(node.child(3).unwrap())?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
+                let clock = self.parse_clock(self.field(node, Field::Clock))?;
                 Ok(Expr::ClockApp(node.range(), self.alloc(e), clock))
             },
             Some(ConcreteNode::TypeAppExpression) => {
-                let e = self.parse_expr(node.child(0).unwrap())?;
-                let ty = self.parse_type(node.child(3).unwrap())?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
+                let ty = self.parse_type(self.field(node, Field::Type))?;
                 Ok(Expr::TypeApp(node.range(), self.alloc(e), ty))
             },
             Some(ConcreteNode::BinopExpression) => {
-                let e1 = self.parse_expr(node.child(0).unwrap())?;
-                let op = match self.node_text(node.child(1).unwrap()) {
+                let e1 = self.parse_expr(self.field(node, Field::Left))?;
+                let op = match self.node_text(self.field(node, Field::Op)) {
                     "*" => Binop::FMul,
                     "/" => Binop::FDiv,
                     "+" => Binop::FAdd,
@@ -359,7 +421,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                     ".!=." => Binop::INe,
                     op => panic!("unknown binop \"{}\"", op)
                 };
-                let e2 = self.parse_expr(node.child(2).unwrap())?;
+                let e2 = self.parse_expr(self.field(node, Field::Right))?;
                 Ok(Expr::Binop(node.range(), op, self.alloc(e1), self.alloc(e2)))
             },
             Some(_) =>
@@ -375,7 +437,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             Some(ConcreteNode::Type) =>
                 self.parse_type(node.child(0).unwrap()),
             Some(ConcreteNode::WrapType) =>
-                self.parse_type(node.child(1).unwrap()),
+                self.parse_type(self.field(node, Field::Type)),
             Some(ConcreteNode::BaseType) =>
                 Ok(match self.node_text(node) {
                     "sample" => Type::Sample,
@@ -384,43 +446,43 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                     base => panic!("unknown base type {base}"),
                 }),
             Some(ConcreteNode::FunctionType) => {
-                let ty1 = self.parse_type(node.child(0).unwrap())?;
-                let ty2 = self.parse_type(node.child(2).unwrap())?;
+                let ty1 = self.parse_type(self.field(node, Field::Arg))?;
+                let ty2 = self.parse_type(self.field(node, Field::Ret))?;
                 Ok(Type::Function(Box::new(ty1), Box::new(ty2)))
             },
             Some(ConcreteNode::StreamType) => {
-                let clock = self.parse_clock(node.child(3).unwrap())?;
-                let ty = self.parse_type(node.child(5).unwrap())?;
+                let clock = self.parse_clock(self.field(node, Field::Clock))?;
+                let ty = self.parse_type(self.field(node, Field::Type))?;
                 Ok(Type::Stream(clock, Box::new(ty)))
             },
             Some(ConcreteNode::ProductType) => {
-                let ty1 = self.parse_type(node.child(0).unwrap())?;
-                let ty2 = self.parse_type(node.child(2).unwrap())?;
+                let ty1 = self.parse_type(self.field(node, Field::Left))?;
+                let ty2 = self.parse_type(self.field(node, Field::Right))?;
                 Ok(Type::Product(Box::new(ty1), Box::new(ty2)))
             },
             Some(ConcreteNode::SumType) => {
-                let ty1 = self.parse_type(node.child(0).unwrap())?;
-                let ty2 = self.parse_type(node.child(2).unwrap())?;
+                let ty1 = self.parse_type(self.field(node, Field::Left))?;
+                let ty2 = self.parse_type(self.field(node, Field::Right))?;
                 Ok(Type::Sum(Box::new(ty1), Box::new(ty2)))
             },
             Some(ConcreteNode::ArrayType) => {
-                let ty = self.parse_type(node.child(1).unwrap())?;
-                let size = self.parse_size(node.child(3).unwrap())?;
+                let ty = self.parse_type(self.field(node, Field::Type))?;
+                let size = self.parse_size(self.field(node, Field::Size))?;
                 Ok(Type::Array(Box::new(ty), size))
             },
             Some(ConcreteNode::LaterType) => {
-                let clock = self.parse_clock(node.child(3).unwrap())?;
-                let ty = self.parse_type(node.child(5).unwrap())?;
+                let clock = self.parse_clock(self.field(node, Field::Clock))?;
+                let ty = self.parse_type(self.field(node, Field::Type))?;
                 Ok(Type::Later(clock, Box::new(ty)))
             },
             Some(ConcreteNode::BoxType) => {
-                let ty = self.parse_type(node.child(1).unwrap())?;
+                let ty = self.parse_type(self.field(node, Field::Type))?;
                 Ok(Type::Box(Box::new(ty)))
             },
             Some(ConcreteNode::ForallType) => {
-                let x = self.identifier(node.child(1).unwrap());
-                let k = self.parse_kind(node.child(3).unwrap())?;
-                let ty = self.parse_type(node.child(5).unwrap())?;
+                let x = self.identifier(self.field(node, Field::Binder));
+                let k = self.parse_kind(self.field(node, Field::Kind))?;
+                let ty = self.parse_type(self.field(node, Field::Type))?;
                 Ok(Type::Forall(x, k, Box::new(ty)))
             },
             Some(ConcreteNode::VarType) => {
@@ -451,12 +513,13 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
     }
 
     fn parse_clock<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<Clock, ParseError> {
-        if node.child_count() == 1 {
-            Ok(Clock { coeff: Ratio::from_integer(1), var: self.identifier(node.child(0).unwrap()) })
+        let coeff = if let Some(coeff_node) = self.field_opt(node, Field::Coeff) {
+            self.parse_clock_coeff(coeff_node)?
         } else {
-            let coeff = self.parse_clock_coeff(node.child(0).unwrap())?;
-            Ok(Clock { coeff, var: self.identifier(node.child(1).unwrap()) })
-        }
+            Ratio::from_integer(1)
+        };
+        let var = self.identifier(self.field(node, Field::Ident));
+        Ok(Clock { coeff, var })
     }
 
     fn parse_clock_coeff(&mut self, node: tree_sitter::Node<'_>) -> Result<Ratio<u32>, ParseError> {
