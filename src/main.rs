@@ -102,8 +102,8 @@ impl<'a> TopLevel<'a> {
         Parser::new(&mut self.interner, &mut self.arena)
     }
 
-    fn make_typechecker<'b>(&'b mut self) -> Typechecker<'b> {
-        Typechecker { globals: &mut self.globals, interner: &mut self.interner }
+    fn make_typechecker<'b>(&'b mut self) -> Typechecker<'b, 'a, tree_sitter::Range> {
+        Typechecker { arena: self.arena,  globals: &mut self.globals, interner: &mut self.interner }
     }
 }
 
@@ -186,10 +186,10 @@ fn cmd_interpret<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopL
         Ok(parsed_file) => parsed_file,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
+    let elabbed_file = toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
 
     let arena = Arena::new();
-    let defs: HashMap<Symbol, &Expr<'_, ()>> = parsed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
+    let defs: HashMap<Symbol, &Expr<'_, ()>> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
     let main = *defs.get(&parsed_file.defs.last().unwrap().name).unwrap();
     let builtins = make_builtins(&mut toplevel.interner);
     let interp_ctx = interp::InterpretationContext { builtins: &builtins, defs: &defs, env: HashMap::new() };
@@ -211,11 +211,14 @@ fn repl_one<'a>(toplevel: &mut TopLevel<'a>, interp_ctx: &interp::Interpretation
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
     let empty_symbol = toplevel.interner.get_or_intern_static("");
-    let ty = toplevel.make_typechecker().synthesize(&Ctx::Empty, expr).map_err(|e| TopLevelError::TypeError(code, typing::FileTypeErrors { errs: vec![TopLevelTypeError::TypeError(empty_symbol, e)] } ))?;
+    let (expr_elab, ty) = toplevel
+        .make_typechecker()
+        .synthesize(&Ctx::Empty, expr)
+        .map_err(|e| TopLevelError::TypeError(code, typing::FileTypeErrors { errs: vec![TopLevelTypeError::TypeError(empty_symbol, e)] } ))?;
     println!("synthesized type: {}", ty.pretty(&toplevel.interner));
 
     let arena = Arena::new();
-    let expr_unannotated = expr.map_ext(&arena, &(|_| ()));
+    let expr_unannotated = expr_elab.map_ext(&arena, &(|_| ()));
 
     match interp::interp(&interp_ctx, &expr_unannotated) {
         Ok(v) => println!("{:?}", v),
@@ -269,10 +272,10 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, length: us
         Ok(parsed_file) => parsed_file,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
+    let elabbed_file = toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
 
     let arena = Arena::new();
-    let defs: HashMap<Symbol, &Expr<'_, ()>> = parsed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
+    let defs: HashMap<Symbol, &Expr<'_, ()>> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
     let main_sym = toplevel.interner.get_or_intern_static("main");
     let main_def = parsed_file.defs.iter().filter(|x| x.name == main_sym).next().unwrap();
     verify_sample_type(&main_def.type_)?;
@@ -306,10 +309,10 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
         Ok(parsed_file) => parsed_file,
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
-    toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
+    let elabbed_file = toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
 
     let arena = Arena::new();
-    let defs: Vec<(Symbol, &Expr<'_, ()>)> = parsed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
+    let defs: Vec<(Symbol, &Expr<'_, ()>)> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
 
     let builtins = make_builtins(&mut toplevel.interner);
     let mut builtin_globals = HashMap::new();

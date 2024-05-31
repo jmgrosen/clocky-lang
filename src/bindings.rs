@@ -35,8 +35,8 @@ impl<'a> TopLevel<'a> {
         Parser::new(&mut self.interner, &mut self.arena)
     }
 
-    fn make_typechecker<'b>(&'b mut self) -> Typechecker<'b> {
-        Typechecker { globals: &mut self.globals, interner: &mut self.interner }
+    fn make_typechecker<'b>(&'b mut self) -> Typechecker<'b, 'a, tree_sitter::Range> {
+        Typechecker { arena: self.arena, globals: &mut self.globals, interner: &mut self.interner }
     }
 }
 
@@ -83,10 +83,10 @@ pub fn compile(code: String) -> Result<Vec<u8>, String> {
         Ok(parsed_file) => parsed_file,
         Err(e) => { return Err(format!("{:?}", TopLevelError::ParseError(code, e))); }
     };
-    toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| format!("{:?}", TopLevelError::TypeError(code, e)))?;
+    let elabbed_file = toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| format!("{:?}", TopLevelError::TypeError(code, e)))?;
 
     let arena = Arena::new();
-    let defs: Vec<(Symbol, &Expr<'_, ()>)> = parsed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
+    let defs: Vec<(Symbol, &Expr<'_, ()>)> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
 
     let builtins = make_builtins(&mut toplevel.interner);
     let mut builtin_globals = HashMap::new();

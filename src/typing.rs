@@ -7,8 +7,9 @@ use std::fmt::Write;
 use num::{One, rational::Ratio};
 use string_interner::DefaultStringInterner;
 use indenter::{Format, indented, Indented};
+use typed_arena::Arena;
 
-use crate::expr::{Binop, Expr, SourceFile, Symbol, TopLevelDefKind, Value};
+use crate::expr::{Binop, Expr, SourceFile, Symbol, TopLevelDef, TopLevelDefKind, Value};
 use crate::util::parenthesize;
 
 // eventually this will get more complicated...
@@ -764,9 +765,10 @@ impl<'a> fmt::Display for PrettyTypeError<'a, tree_sitter::Range> {
     }
 }
 
-pub struct Typechecker<'a> {
+pub struct Typechecker<'a, 'b, R> {
     pub globals: &'a mut Globals,
     pub interner: &'a mut DefaultStringInterner,
+    pub arena: &'b Arena<Expr<'b, R>>,
 }
 
 
@@ -780,90 +782,110 @@ pub struct Typechecker<'a> {
 // - [ ] proj?
 // - [X] fix
 
-impl<'a> Typechecker<'a> {
-    pub fn check<'b, R: Clone>(&mut self, ctx: &Ctx, expr: &'b Expr<'b, R>, ty: &Type) -> Result<(), TypeError<'b, R>> {
+impl<'a, 'b, R: Clone> Typechecker<'a, 'b, R> {
+    fn alloc(&self, e: Expr<'b, R>) -> &'b Expr<'b, R> {
+        self.arena.alloc(e)
+    }
+
+    pub fn check<'c>(&mut self, ctx: &Ctx, expr: &'c Expr<'c, R>, ty: &Type) -> Result<&'b Expr<'b, R>, TypeError<'c, R>> {
         match (ty, expr) {
             // CAREFUL! positioning this here matters, with respect to
             // the other non-expression-syntax-guided rules
             // (particlarly lob)
             (&Type::Forall(x, k, ref ty), _) =>
                 self.check(&Ctx::TypeVar(x, k, Rc::new(ctx.clone())), expr, ty),
-            (&Type::Unit, &Expr::Val(_, Value::Unit)) =>
-                Ok(()),
-            (&Type::Function(ref ty1, ref ty2), &Expr::Lam(_, x, e)) => {
+            (&Type::Unit, &Expr::Val(ref r, Value::Unit)) =>
+                Ok(self.alloc(Expr::Val(r.clone(), Value::Unit))),
+            (&Type::Function(ref ty1, ref ty2), &Expr::Lam(ref r, x, e)) => {
                 let new_ctx = ctx.clone().with_var(x, (**ty1).clone());
-                self.check(&new_ctx, e, ty2)
+                let e_elab = self.check(&new_ctx, e, ty2)?;
+                Ok(self.alloc(Expr::Lam(r.clone(), x, e_elab)))
             },
-            (_, &Expr::Lob(_, clock, x, e)) => {
+            (_, &Expr::Lob(ref r, clock, x, e)) => {
                 let rec_ty = Type::Box(Box::new(Type::Later(clock, Box::new(ty.clone()))));
                 let new_ctx = ctx.box_strengthen().with_var(x, rec_ty);
-                self.check(&new_ctx, e, ty)
+                let e_elab = self.check(&new_ctx, e, ty)?;
+                Ok(self.alloc(Expr::Lob(r.clone(), clock, x, e_elab)))
             },
             // if we think of streams as infinitary products, it makes sense to *check* their introduction, right?
-            (&Type::Stream(clock, ref ty1), &Expr::Gen(_, eh, et)) => {
+            (&Type::Stream(clock, ref ty1), &Expr::Gen(ref r, eh, et)) => {
                 // TODO: probably change once we figure out the stream semantics we actually want
-                self.check(&ctx, eh, ty1)?;
-                self.check(&ctx, et, &Type::Later(clock, Box::new(ty.clone())))
+                let eh_elab = self.check(&ctx, eh, ty1)?;
+                let et_elab = self.check(&ctx, et, &Type::Later(clock, Box::new(ty.clone())))?;
+                Ok(self.alloc(Expr::Gen(r.clone(), eh_elab, et_elab)))
             },
             (_, &Expr::LetIn(ref r, x, None, e1, e2)) =>
                 match self.synthesize(ctx, e1) {
-                    Ok(ty_x) => {
+                    Ok((e1_elab, ty_x)) => {
                         let new_ctx = ctx.clone().with_var(x, ty_x);
-                        self.check(&new_ctx, e2, ty)
+                        let e2_elab = self.check(&new_ctx, e2, ty)?;
+                        Ok(self.alloc(Expr::LetIn(r.clone(), x, None, e1_elab, e2_elab)))
                     },
                     Err(err) =>
                         Err(TypeError::let_failure(r.clone(), x, e1, err)),
                 },
             (_, &Expr::LetIn(ref r, x, Some(ref e1_ty), e1, e2)) => {
-                if let Err(err) = self.check(ctx, e1, e1_ty) {
-                    return Err(TypeError::LetCheckFailure {
-                        range: r.clone(),
-                        var: x,
-                        expected_type: e1_ty.clone(),
-                        expr: e1,
-                        err: Box::new(err)
-                    });
-                }
+                let e1_elab = match self.check(ctx, e1, e1_ty) {
+                    Ok(e1_elab) =>
+                        e1_elab,
+                    Err(err) =>
+                        return Err(TypeError::LetCheckFailure {
+                            range: r.clone(),
+                            var: x,
+                            expected_type: e1_ty.clone(),
+                            expr: e1,
+                            err: Box::new(err)
+                        }),
+                };
                 let new_ctx = ctx.clone().with_var(x, e1_ty.clone());
-                self.check(&new_ctx, e2, ty)
+                let e2_elab = self.check(&new_ctx, e2, ty)?;
+                Ok(self.alloc(Expr::LetIn(r.clone(), x, Some(e1_ty.clone()), e1_elab, e2_elab)))
             },
-            (&Type::Product(ref ty1, ref ty2), &Expr::Pair(_, e1, e2)) => {
-                self.check(ctx, e1, ty1)?;
-                self.check(ctx, e2, ty2)
+            (&Type::Product(ref ty1, ref ty2), &Expr::Pair(ref r, e1, e2)) => {
+                let e1_elab = self.check(ctx, e1, ty1)?;
+                let e2_elab = self.check(ctx, e2, ty2)?;
+                Ok(self.alloc(Expr::Pair(r.clone(), e1_elab, e2_elab)))
             },
             (_, &Expr::UnPair(ref r, x1, x2, e0, e)) =>
                 match self.synthesize(ctx, e0)? {
-                    Type::Product(ty1, ty2) => {
+                    (e0_elab, Type::Product(ty1, ty2)) => {
                         let new_ctx = ctx.clone().with_var(x1, *ty1).with_var(x2, *ty2);
-                        self.check(&new_ctx, e, ty)
+                        let e_elab = self.check(&new_ctx, e, ty)?;
+                        Ok(self.alloc(Expr::UnPair(r.clone(), x1, x2, e0_elab, e_elab)))
                     },
-                    ty =>
+                    (_, ty) =>
                         Err(TypeError::unpairing_non_product(r.clone(), e0, ty)),
                 },
             (_, &Expr::ExElim(ref r, c, x, e0, e)) =>
                 match self.synthesize(ctx, e0)? {
-                    Type::Exists(d, ty_var) => {
+                    (e0_elab, Type::Exists(d, ty_var)) => {
                         let ty_substed = ty_var.subst(d, &ToSubst::Clock(Clock::from_var(c)), self.interner);
                         let new_ctx = ctx.clone().with_type_var(c, Kind::Clock).with_var(x, ty_substed);
-                        self.check(&new_ctx, e, ty)
+                        let e_elab = self.check(&new_ctx, e, ty)?;
+                        Ok(self.alloc(Expr::ExElim(r.clone(), c, x, e0_elab, e_elab)))
                     },
-                    ty =>
+                    (_, ty) =>
                         Err(TypeError::ExElimNonExists { range: r.clone(), expr: e0, actual_type: ty }),
                 },
-            (&Type::Sum(ref ty1, _), &Expr::InL(_, e)) =>
-                self.check(ctx, e, ty1),
-            (&Type::Sum(_, ref ty2), &Expr::InR(_, e)) =>
-                self.check(ctx, e, ty2),
+            (&Type::Sum(ref ty1, _), &Expr::InL(ref r, e)) => {
+                let e_elab = self.check(ctx, e, ty1)?;
+                Ok(self.alloc(Expr::InL(r.clone(), e_elab)))
+            },
+            (&Type::Sum(_, ref ty2), &Expr::InR(ref r, e)) => {
+                let e_elab = self.check(ctx, e, ty2)?;
+                Ok(self.alloc(Expr::InR(r.clone(), e_elab)))
+            },
             (_, &Expr::Case(ref r, e0, x1, e1, x2, e2)) =>
                 match self.synthesize(ctx, e0)? {
-                    Type::Sum(ty1, ty2) => {
+                    (e0_elab, Type::Sum(ty1, ty2)) => {
                         let old_ctx = Rc::new(ctx.clone());
                         let ctx1 = Ctx::TermVar(x1, *ty1, old_ctx.clone());
-                        self.check(&ctx1, e1, ty)?;
+                        let e1_elab = self.check(&ctx1, e1, ty)?;
                         let ctx2 = Ctx::TermVar(x2, *ty2, old_ctx);
-                        self.check(&ctx2, e2, ty)
+                        let e2_elab = self.check(&ctx2, e2, ty)?;
+                        Ok(self.alloc(Expr::Case(r.clone(), e0_elab, x1, e1_elab, x2, e2_elab)))
                     },
-                    ty =>
+                    (_, ty) =>
                         Err(TypeError::casing_non_sum(r.clone(), e0, ty)),
                 },
             (&Type::Array(ref ty, ref size), &Expr::Array(ref r, ref es)) =>
@@ -874,17 +896,21 @@ impl<'a> Typechecker<'a> {
                         found_size: es.len()
                     })
                 } else {
-                    for e in es.iter() {
-                        self.check(ctx, e, ty)?;
-                    }
-                    Ok(())
+                    let es_elab = es
+                        .iter()
+                        .map(|e| self.check(ctx, e, ty))
+                        .collect::<Result<_, _>>()?;
+                    Ok(self.alloc(Expr::Array(r.clone(), es_elab)))
                 },
-            (&Type::Later(clock, ref ty), &Expr::Delay(_, e)) => {
+            (&Type::Later(clock, ref ty), &Expr::Delay(ref r, e)) => {
                 let new_ctx = Ctx::Tick(clock, Rc::new(ctx.clone()));
-                self.check(&new_ctx, e, ty)
+                let e_elab = self.check(&new_ctx, e, ty)?;
+                Ok(self.alloc(Expr::Delay(r.clone(), e_elab)))
             },
-            (&Type::Box(ref ty), &Expr::Box(_, e)) =>
-                self.check(&ctx.box_strengthen(), e, ty),
+            (&Type::Box(ref ty), &Expr::Box(ref r, e)) => {
+                let e_elab = self.check(&ctx.box_strengthen(), e, ty)?;
+                Ok(self.alloc(Expr::Box(r.clone(), e_elab)))
+            },
             (&Type::Exists(c, ref ty), &Expr::ExIntro(ref r, d, e)) => {
                 match ctx.lookup_type_var(d.var) {
                     Some(Kind::Clock) => { }
@@ -893,12 +919,13 @@ impl<'a> Typechecker<'a> {
                     }
                 }
                 let expected = ty.subst(c, &ToSubst::Clock(d), self.interner);
-                self.check(ctx, e, &expected)
+                let e_elab = self.check(ctx, e, &expected)?;
+                Ok(self.alloc(Expr::ExIntro(r.clone(), d, e_elab)))
             },
             (_, _) => {
-                let synthesized = match self.synthesize(ctx, expr) {
-                    Ok(ty) =>
-                        ty,
+                let (e_elab, synthesized) = match self.synthesize(ctx, expr) {
+                    Ok(res) =>
+                        res,
                     Err(TypeError::SynthesisUnsupported { .. }) =>
                         return Err(TypeError::CouldntCheck {
                             expr,
@@ -914,7 +941,7 @@ impl<'a> Typechecker<'a> {
                 };
 
                 if subtype(ctx, &synthesized, ty, self.interner) {
-                    Ok(())
+                    Ok(e_elab)
                 } else {
                     Err(TypeError::mismatching(expr, synthesized, ty.clone()))
                 }
@@ -922,19 +949,19 @@ impl<'a> Typechecker<'a> {
         }
     }
 
-    pub fn synthesize<'b, R: Clone>(&mut self, ctx: &Ctx, expr: &'b Expr<'b, R>) -> Result<Type, TypeError<'b, R>> {
+    pub fn synthesize<'c>(&mut self, ctx: &Ctx, expr: &'c Expr<'c, R>) -> Result<(&'b Expr<'b, R>, Type), TypeError<'c, R>> {
         match expr {
-            &Expr::Val(_, ref v) =>
+            &Expr::Val(ref r, ref v) =>
                 match *v {
-                    Value::Unit => Ok(Type::Unit),
-                    Value::Sample(_) => Ok(Type::Sample),
-                    Value::Index(_) => Ok(Type::Index),
+                    Value::Unit => Ok((self.alloc(Expr::Val(r.clone(), Value::Unit)), Type::Unit)),
+                    Value::Sample(s) => Ok((self.alloc(Expr::Val(r.clone(), Value::Sample(s))), Type::Sample)),
+                    Value::Index(i) => Ok((self.alloc(Expr::Val(r.clone(), Value::Index(i))), Type::Index)),
                     _ => panic!("trying to type {v:?} but that kind of value shouldn't be created yet?"),
-                }
+                },
             &Expr::Var(ref r, x) =>
                 if let Some((timing, ty)) = ctx.lookup_term_var(x) {
                     if timing.is_empty() || ty.is_stable() {
-                        Ok(ty.clone())
+                        Ok((self.alloc(Expr::Var(r.clone(), x)), ty.clone()))
                     } else {
                         Err(TypeError::VariableTimingBad {
                             range: r.clone(),
@@ -944,7 +971,7 @@ impl<'a> Typechecker<'a> {
                         })
                     }
                 } else if let Some(ty) = self.globals.get(&x) {
-                    Ok(ty.clone())
+                    Ok((self.alloc(Expr::Var(r.clone(), x)), ty.clone()))
                 } else {
                     Err(TypeError::var_not_found(r.clone(), x))
                 },
@@ -958,19 +985,19 @@ impl<'a> Typechecker<'a> {
                 )?;
 
                 match self.check(ctx, e, ty) {
-                    Ok(()) => Ok(ty.clone()),
+                    Ok(e_elab) => Ok((e_elab, ty.clone())),
                     Err(err) => Err(TypeError::bad_annotation(r.clone(), e, ty.clone(), err)),
                 }
             },
             &Expr::App(ref r, e1, e2) =>
                 match self.synthesize(ctx, e1)? {
-                    Type::Function(ty_a, ty_b) => {
+                    (e1_elab, Type::Function(ty_a, ty_b)) => {
                         match self.check(ctx, e2, &ty_a) {
-                            Ok(()) => Ok(*ty_b),
+                            Ok(e2_elab) => Ok((self.alloc(Expr::App(r.clone(), e1_elab, e2_elab)), *ty_b)),
                             Err(arg_err) => Err(TypeError::bad_argument(r.clone(), *ty_a, e1, e2, arg_err)),
                         }
                     },
-                    ty =>
+                    (_, ty) =>
                         Err(TypeError::non_function_application(r.clone(), e1, ty)),
                 },
             &Expr::Adv(ref r, e1) => {
@@ -985,8 +1012,8 @@ impl<'a> Typechecker<'a> {
                 // context representation
                 let pretend = Ctx::Pretend(Rc::new(ctx.clone()));
                 let (synthesized_clock, synthesized_type) = match self.synthesize(&pretend, e1)? {
-                    Type::Later(clock, ty) => (clock, ty),
-                    ty => return Err(TypeError::forcing_non_thunk(r.clone(), e1, ty)),
+                    (_, Type::Later(clock, ty)) => (clock, ty),
+                    (_, ty) => return Err(TypeError::forcing_non_thunk(r.clone(), e1, ty)),
                 };
                 let Some(stripped_ctx) = ctx.strip_tick(synthesized_clock) else {
                     return Err(TypeError::ForcingWithNotEnoughTick {
@@ -997,8 +1024,9 @@ impl<'a> Typechecker<'a> {
                     });
                 };
                 match self.check(&stripped_ctx, e1, &Type::Later(synthesized_clock, synthesized_type.clone())) {
-                    Ok(()) =>
-                        Ok(*synthesized_type),
+                    Ok(e1_elab) =>
+                        // TODO: bubble this up to the topmost delay during elaboration?
+                        Ok((self.alloc(Expr::Adv(r.clone(), e1_elab)), *synthesized_type)),
                     Err(err) =>
                         Err(TypeError::ForcingDoesntHoldUp {
                             range: r.clone(),
@@ -1011,81 +1039,99 @@ impl<'a> Typechecker<'a> {
             },
             &Expr::LetIn(ref r, x, None, e1, e2) =>
                 match self.synthesize(ctx, e1) {
-                    Ok(ty_x) => {
+                    Ok((e1_elab, ty_x)) => {
                         let new_ctx = ctx.clone().with_var(x, ty_x);
-                        self.synthesize(&new_ctx, e2)
+                        let (e2_elab, e2_ty) = self.synthesize(&new_ctx, e2)?;
+                        Ok((self.alloc(Expr::LetIn(r.clone(), x, None, e1_elab, e2_elab)), e2_ty))
                     },
                     Err(err) =>
                         Err(TypeError::let_failure(r.clone(), x, e1, err)),
                 },
             &Expr::LetIn(ref r, x, Some(ref e1_ty), e1, e2) => {
-                if let Err(err) = self.check(ctx, e1, e1_ty) {
-                    return Err(TypeError::LetCheckFailure {
-                        range: r.clone(),
-                        var: x,
-                        expected_type: e1_ty.clone(),
-                        expr: e1,
-                        err: Box::new(err)
-                    });
-                }
+                let e1_elab = match self.check(ctx, e1, e1_ty) {
+                    Ok(e1_elab) =>
+                        e1_elab,
+                    Err(err) =>
+                        return Err(TypeError::LetCheckFailure {
+                            range: r.clone(),
+                            var: x,
+                            expected_type: e1_ty.clone(),
+                            expr: e1,
+                            err: Box::new(err)
+                        }),
+                };
                 let new_ctx = ctx.clone().with_var(x, e1_ty.clone());
-                self.synthesize(&new_ctx, e2)
+                let (e2_elab, e2_ty) = self.synthesize(&new_ctx, e2)?;
+                Ok((self.alloc(Expr::LetIn(r.clone(), x, Some(e1_ty.clone()), e1_elab, e2_elab)), e2_ty))
             },
             &Expr::UnPair(ref r, x1, x2, e0, e) =>
                 match self.synthesize(ctx, e0)? {
-                    Type::Product(ty1, ty2) => {
+                    (e0_elab, Type::Product(ty1, ty2)) => {
                         let new_ctx = ctx.clone().with_var(x1, *ty1).with_var(x2, *ty2);
-                        self.synthesize(&new_ctx, e)
+                        let (e_elab, e_ty) = self.synthesize(&new_ctx, e)?;
+                        Ok((self.alloc(Expr::UnPair(r.clone(), x1, x2, e0_elab, e_elab)), e_ty))
                     },
-                    ty =>
+                    (_, ty) =>
                         Err(TypeError::unpairing_non_product(r.clone(), e0, ty)),
                 },
             &Expr::ExElim(ref r, c, x, e0, e) =>
                 match self.synthesize(ctx, e0)? {
-                    Type::Exists(d, ty) => {
+                    (e0_elab, Type::Exists(d, ty)) => {
                         let ty_substed = ty.subst(d, &ToSubst::Clock(Clock::from_var(c)), self.interner);
                         let new_ctx = ctx.clone().with_type_var(c, Kind::Clock).with_var(x, ty_substed);
-                        self.synthesize(&new_ctx, e)
+                        let (e_elab, e_ty) = self.synthesize(&new_ctx, e)?;
+                        Ok((self.alloc(Expr::ExElim(r.clone(), c, x, e0_elab, e_elab)), e_ty))
                     },
-                    ty =>
+                    (_, ty) =>
                         Err(TypeError::ExElimNonExists { range: r.clone(), expr: e0, actual_type: ty }),
                 },
             &Expr::Case(ref r, e0, x1, e1, x2, e2) =>
                 match self.synthesize(ctx, e0)? {
-                    Type::Sum(ty1, ty2) => {
+                    (e0_elab, Type::Sum(ty1, ty2)) => {
                         let old_ctx = Rc::new(ctx.clone());
     
                         let ctx1 = Ctx::TermVar(x1, *ty1, old_ctx.clone());
-                        let ty_out1 = self.synthesize(&ctx1, e1)?;
+                        let (e1_elab, e1_ty) = self.synthesize(&ctx1, e1)?;
     
                         let ctx2 = Ctx::TermVar(x2, *ty2, old_ctx);
-                        let ty_out2 = self.synthesize(&ctx2, e2)?;
+                        let (e2_elab, e2_ty) = self.synthesize(&ctx2, e2)?;
     
-                        meet(ctx, ty_out1, ty_out2, self.interner)
+                        let ty = meet(ctx, e1_ty, e2_ty, self.interner)?;
+
+                        Ok((self.alloc(Expr::Case(r.clone(), e0_elab, x1, e1_elab, x2, e2_elab)), ty))
                     },
-                    ty =>
+                    (_, ty) =>
                         Err(TypeError::casing_non_sum(r.clone(), e0, ty)),
                 },
             &Expr::UnGen(ref r, e) =>
                 match self.synthesize(ctx, e)? {
-                    Type::Stream(clock, ty) =>
-                        Ok(Type::Product(ty.clone(), Box::new(Type::Later(clock, Box::new(Type::Stream(clock, ty)))))),
-                    ty =>
+                    (e_elab, Type::Stream(clock, ty)) => {
+                        let out_ty = Type::Product(
+                            ty.clone(),
+                            Box::new(Type::Later(
+                                clock,
+                                Box::new(Type::Stream(clock, ty))
+                            ))
+                        );
+                        Ok((self.alloc(Expr::UnGen(r.clone(), e_elab)), out_ty))
+                    },
+                    (_, ty) =>
                         Err(TypeError::UnGenningNonStream { range: r.clone(), expr: e, actual_type: ty }),
                 }
             &Expr::Unbox(ref r, e) =>
                 match self.synthesize(ctx, e)? {
-                    Type::Box(ty) =>
-                        Ok(*ty),
-                    ty =>
+                    (e_elab, Type::Box(ty)) =>
+                        Ok((self.alloc(Expr::Unbox(r.clone(), e_elab)), *ty)),
+                    (_, ty) =>
                         Err(TypeError::UnboxingNonBox { range: r.clone(), expr: e, actual_type: ty }),
                 },
             &Expr::ClockApp(ref r, e, c) =>
                 // TODO: check validity of c
                 match self.synthesize(ctx, e)? {
-                    Type::Forall(x, Kind::Clock, ty) =>
-                        Ok(ty.subst(x, &ToSubst::Clock(c), self.interner)),
-                    ty =>
+                    (e_elab, Type::Forall(x, Kind::Clock, ty)) =>
+                        Ok((self.alloc(Expr::ClockApp(r.clone(), e_elab, c)),
+                            ty.subst(x, &ToSubst::Clock(c), self.interner))),
+                    (_, ty) =>
                         Err(TypeError::NonForallClockApp { range: r.clone(), purported_forall_clock: e, actual_type: ty }),
                 },
             &Expr::TypeApp(ref r, e, ref ty_to_subst) => {
@@ -1098,13 +1144,14 @@ impl<'a> Typechecker<'a> {
                 )?;
 
                 match self.synthesize(ctx, e)? {
-                    Type::Forall(x, Kind::Type, ty) =>
-                        Ok(ty.subst(x, &ToSubst::Type(ty_to_subst.clone()), self.interner)),
-                    ty =>
+                    (e_elab, Type::Forall(x, Kind::Type, ty)) =>
+                        Ok((self.alloc(Expr::TypeApp(r.clone(), e_elab, ty_to_subst.clone())),
+                            ty.subst(x, &ToSubst::Type(ty_to_subst.clone()), self.interner))),
+                    (_, ty) =>
                         Err(TypeError::NonForallTypeApp { range: r.clone(), purported_forall_type: e, actual_type: ty }),
                 }
             },
-            &Expr::Binop(ref _r, op, e1, e2) => {
+            &Expr::Binop(ref r, op, e1, e2) => {
                 // TODO: make this const somewhere and somehow
                 let tybool = Type::Sum(Box::new(Type::Unit), Box::new(Type::Unit));
                 let (ty1, ty2, tyret) = match op {
@@ -1135,16 +1182,17 @@ impl<'a> Typechecker<'a> {
                     Binop::INe => (Type::Index, Type::Index, tybool),
                 };
                 // TODO: should probably have a more specific type error for this?
-                self.check(ctx, e1, &ty1)?;
-                self.check(ctx, e2, &ty2)?;
-                Ok(tyret)
+                let e1_elab = self.check(ctx, e1, &ty1)?;
+                let e2_elab = self.check(ctx, e2, &ty2)?;
+                Ok((self.alloc(Expr::Binop(r.clone(), op, e1_elab, e2_elab)), tyret))
             },
             _ =>
                 Err(TypeError::synthesis_unsupported(expr)),
         }
     }
 
-    pub fn check_file<'c, 'b, R: Clone>(&mut self, file: &'c SourceFile<'b, R>) -> Result<(), FileTypeErrors<'b, R>> {
+    pub fn check_file<'c, 'd>(&mut self, file: &'c SourceFile<'d, R>) -> Result<SourceFile<'b, R>, FileTypeErrors<'d, R>> {
+        let mut defs = Vec::new();
         let mut errs = Vec::new();
         let mut running_ctx = Ctx::Empty;
         for def in file.defs.iter() {
@@ -1152,8 +1200,13 @@ impl<'a> Typechecker<'a> {
                 TopLevelDefKind::Let => &running_ctx,
                 TopLevelDefKind::Def => &Ctx::Empty,
             };
-            if let Err(err) = self.check(ctx, &def.body, &def.type_) {
-                errs.push(TopLevelTypeError::TypeError(def.name, err));
+            match self.check(ctx, &def.body, &def.type_) {
+                Ok(body_elab) => {
+                    defs.push(TopLevelDef { body: body_elab, ..def.clone() });
+                }
+                Err(err) => {
+                    errs.push(TopLevelTypeError::TypeError(def.name, err));
+                }
             }
             if running_ctx.lookup_term_var(def.name).is_some() ||
                 self.globals.get(&def.name).is_some() {
@@ -1170,7 +1223,7 @@ impl<'a> Typechecker<'a> {
         }
 
         if errs.is_empty() {
-            Ok(())
+            Ok(SourceFile { defs })
         } else {
             Err(FileTypeErrors { errs })
         }
