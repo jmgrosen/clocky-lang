@@ -62,7 +62,9 @@ module.exports = grammar({
             $.unbox_expression,
             $.clockapp_expression,
             $.typeapp_expression,
-            $.binop_expression
+            $.binop_expression,
+            $.ex_intro,
+            $.ex_elim
         ),
 
         wrap_expression: $ => seq('(', field('expr', $.expression), ')'),    
@@ -216,6 +218,20 @@ module.exports = grammar({
             prec.left(0, seq(field('left', $.expression), field('op', '.!=.'), field('right', $.expression))),
         ),
 
+        ex_intro: $ => prec.right(seq('clock', field('clock', $.clock), 'and', field('expr', $.expression))),
+
+        ex_elim: $ => prec.left(-1, seq(
+            'let',
+            'clock',
+            field('binderclock', $.identifier),
+            'and',
+            field('binderexpr', $.identifier),
+            '=',
+            field('bound', $.expression),
+            'in',
+            field('body', $.expression)
+        )),
+
         type: $ => choice(
             $.wrap_type,
             $.base_type,
@@ -227,7 +243,8 @@ module.exports = grammar({
             $.later_type,
             $.box_type,
             $.forall_type,
-            $.var_type
+            $.var_type,
+            $.ex_type,
         ),
 
         wrap_type: $ => seq('(', field('type', $.type), ')'),
@@ -272,6 +289,9 @@ module.exports = grammar({
         )),
 
         var_type: $ => $.identifier,
+
+        // only clock existentials for now
+        ex_type: $ => prec.right(seq('?', field('binder', $.identifier), '.', field('type', $.type))),
 
         kind: $ => choice('clock', 'type')
     }

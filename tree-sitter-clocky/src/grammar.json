@@ -247,6 +247,14 @@
         {
           "type": "SYMBOL",
           "name": "binop_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "ex_intro"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "ex_elim"
         }
       ]
     },
@@ -1838,6 +1846,100 @@
         }
       ]
     },
+    "ex_intro": {
+      "type": "PREC_RIGHT",
+      "value": 0,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "clock"
+          },
+          {
+            "type": "FIELD",
+            "name": "clock",
+            "content": {
+              "type": "SYMBOL",
+              "name": "clock"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "and"
+          },
+          {
+            "type": "FIELD",
+            "name": "expr",
+            "content": {
+              "type": "SYMBOL",
+              "name": "expression"
+            }
+          }
+        ]
+      }
+    },
+    "ex_elim": {
+      "type": "PREC_LEFT",
+      "value": -1,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "let"
+          },
+          {
+            "type": "STRING",
+            "value": "clock"
+          },
+          {
+            "type": "FIELD",
+            "name": "binderclock",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "and"
+          },
+          {
+            "type": "FIELD",
+            "name": "binderexpr",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "="
+          },
+          {
+            "type": "FIELD",
+            "name": "bound",
+            "content": {
+              "type": "SYMBOL",
+              "name": "expression"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "in"
+          },
+          {
+            "type": "FIELD",
+            "name": "body",
+            "content": {
+              "type": "SYMBOL",
+              "name": "expression"
+            }
+          }
+        ]
+      }
+    },
     "type": {
       "type": "CHOICE",
       "members": [
@@ -1884,6 +1986,10 @@
         {
           "type": "SYMBOL",
           "name": "var_type"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "ex_type"
         }
       ]
     },
@@ -2260,6 +2366,39 @@
     "var_type": {
       "type": "SYMBOL",
       "name": "identifier"
+    },
+    "ex_type": {
+      "type": "PREC_RIGHT",
+      "value": 0,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "?"
+          },
+          {
+            "type": "FIELD",
+            "name": "binder",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "."
+          },
+          {
+            "type": "FIELD",
+            "name": "type",
+            "content": {
+              "type": "SYMBOL",
+              "name": "type"
+            }
+          }
+        ]
+      }
     },
     "kind": {
       "type": "CHOICE",

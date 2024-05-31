@@ -1,0 +1,14 @@
+def package_stream : for a : type. for c : clock. ~^(c) a -> ?d. ~^(d) a =
+  \s. clock c and s;;
+
+def enum_stream : for a : type. for c : clock. ~^(c) a -> ~^(c) (index * a) =
+  let go: index -> ~^(c) a -> ~^(c) (index * a) =
+    &^(c) e. \i. \s.
+      let (x, sp) = %s in
+      (i, x) :: `(!(unbox e) (i .+. 1) !sp)
+  in go 0;;
+
+def enum_some_stream : for a : type. (?c. ~^(c) a) -> ?c. ~^(c) (index * a) =
+  \s.
+    let clock c and sp = s in
+    clock c and enum_stream $(a) @(c) sp;;

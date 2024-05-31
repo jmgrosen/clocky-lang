@@ -146,6 +146,7 @@ pub enum Type {
     Box(Box<Type>),
     Forall(Symbol, Kind, Box<Type>), // forall (x : k). ty
     TypeVar(Symbol),
+    Exists(Symbol, Box<Type>),
 }
 
 fn mk_fresh(prefix: Symbol, interner: &mut DefaultStringInterner) -> Symbol {
@@ -196,6 +197,8 @@ impl Type {
             Type::Forall(_, _, _) => false,
             // TODO: perhaps if we add constraints...
             Type::TypeVar(_) => false,
+            // TODO: is this right? well, it's surely not unsafe, right?
+            Type::Exists(_, _) => false,
         }
     }
 
@@ -247,6 +250,16 @@ impl Type {
                     ToSubst::Type(ref ty) if x == y => ty.clone(),
                     _ => Type::TypeVar(y),
                 },
+            Type::Exists(y, ref ty) => {
+                if x == y {
+                    let new_name = mk_fresh(y, interner);
+                    let replacement = ToSubst::Clock(Clock::from_var(new_name));
+                    let freshened = ty.subst(y, &replacement, interner);
+                    Type::Exists(new_name, Box::new(freshened.subst(x, ts, interner)))
+                } else {
+                    Type::Exists(y, Box::new(ty.subst(x, ts, interner)))
+                }
+            },
         }
     }
 
@@ -283,6 +296,10 @@ impl Type {
                 } else {
                     Err(x)
                 },
+            Type::Exists(x, ref ty) => {
+                let new_ctx = Ctx::TypeVar(x, Kind::Clock, Rc::new(ctx.clone()));
+                ty.check_validity(&new_ctx)
+            },
         }
     }
 }
@@ -357,6 +374,11 @@ impl<'a> PrettyType<'a> {
                 }),
             Type::TypeVar(x) =>
                 write!(f, "{}", self.interner.resolve(x).unwrap()),
+            Type::Exists(x, ref ty) =>
+                parenthesize(f, prec > 0, |f| {
+                    write!(f, "? {}. ", self.interner.resolve(x).unwrap())?;
+                    self.for_type(ty).fmt_prec(f, 0)
+                }),
         }
     }
 }
@@ -430,6 +452,10 @@ impl Ctx {
 
     fn with_var(self, x: Symbol, ty: Type) -> Ctx {
         Ctx::TermVar(x, ty, Rc::new(self))
+    }
+
+    fn with_type_var(self, x: Symbol, k: Kind) -> Ctx {
+        Ctx::TypeVar(x, k, Rc::new(self))
     }
 
     // TODO: optimize this for the case that it's kept the same?
@@ -543,6 +569,8 @@ pub enum TypeError<'a, R> {
     NonForallClockApp { range: R, purported_forall_clock: &'a Expr<'a, R>, actual_type: Type },
     NonForallTypeApp { range: R, purported_forall_type: &'a Expr<'a, R>, actual_type: Type },
     InvalidType { range: R, purported_type: Type, bad_symbol: Symbol },
+    InvalidClock { range: R, purported_clock: Clock, bad_symbol: Symbol },
+    ExElimNonExists { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
 }
 
 impl<'a, R> TypeError<'a, R> {
@@ -705,6 +733,12 @@ impl<'a> PrettyTypeError<'a, tree_sitter::Range> {
             TypeError::InvalidType { ref purported_type, bad_symbol, .. } =>
                 write!(f, "invalid type \"{}\"; could not find \"{}\" in the context",
                        self.for_type(purported_type), self.interner.resolve(bad_symbol).unwrap()),
+            TypeError::InvalidClock { ref purported_clock, bad_symbol, .. } =>
+                write!(f, "invalid clock \"{}\"; could not find \"{}\" as a clock in the context",
+                       self.for_clock(purported_clock), self.interner.resolve(bad_symbol).unwrap()),
+            TypeError::ExElimNonExists { expr, ref actual_type, .. } =>
+                write!(f, "trying to exists-elim expression \"{}\" of type \"{}\", which is not an exists",
+                       self.for_expr(expr), self.for_type(actual_type)),
         }
     }
 }
@@ -780,17 +814,17 @@ impl<'a> Typechecker<'a> {
                     Err(err) =>
                         Err(TypeError::let_failure(r.clone(), x, e1, err)),
                 },
-            (_, &Expr::LetIn(ref r, x, Some(ref ty), e1, e2)) => {
-                if let Err(err) = self.check(ctx, e1, ty) {
+            (_, &Expr::LetIn(ref r, x, Some(ref e1_ty), e1, e2)) => {
+                if let Err(err) = self.check(ctx, e1, e1_ty) {
                     return Err(TypeError::LetCheckFailure {
                         range: r.clone(),
                         var: x,
-                        expected_type: ty.clone(),
+                        expected_type: e1_ty.clone(),
                         expr: e1,
                         err: Box::new(err)
                     });
                 }
-                let new_ctx = ctx.clone().with_var(x, ty.clone());
+                let new_ctx = ctx.clone().with_var(x, e1_ty.clone());
                 self.check(&new_ctx, e2, ty)
             },
             (&Type::Product(ref ty1, ref ty2), &Expr::Pair(_, e1, e2)) => {
@@ -805,6 +839,16 @@ impl<'a> Typechecker<'a> {
                     },
                     ty =>
                         Err(TypeError::unpairing_non_product(r.clone(), e0, ty)),
+                },
+            (_, &Expr::ExElim(ref r, c, x, e0, e)) =>
+                match self.synthesize(ctx, e0)? {
+                    Type::Exists(d, ty_var) => {
+                        let ty_substed = ty_var.subst(d, &ToSubst::Clock(Clock::from_var(c)), self.interner);
+                        let new_ctx = ctx.clone().with_type_var(c, Kind::Clock).with_var(x, ty_substed);
+                        self.check(&new_ctx, e, ty)
+                    },
+                    ty =>
+                        Err(TypeError::ExElimNonExists { range: r.clone(), expr: e0, actual_type: ty }),
                 },
             (&Type::Sum(ref ty1, _), &Expr::InL(_, e)) =>
                 self.check(ctx, e, ty1),
@@ -841,6 +885,16 @@ impl<'a> Typechecker<'a> {
             },
             (&Type::Box(ref ty), &Expr::Box(_, e)) =>
                 self.check(&ctx.box_strengthen(), e, ty),
+            (&Type::Exists(c, ref ty), &Expr::ExIntro(ref r, d, e)) => {
+                match ctx.lookup_type_var(d.var) {
+                    Some(Kind::Clock) => { }
+                    _ => {
+                        return Err(TypeError::InvalidClock { range: r.clone(), purported_clock: d, bad_symbol: d.var });
+                    }
+                }
+                let expected = ty.subst(c, &ToSubst::Clock(d), self.interner);
+                self.check(ctx, e, &expected)
+            },
             (_, _) => {
                 let synthesized = match self.synthesize(ctx, expr) {
                     Ok(ty) =>
@@ -964,17 +1018,17 @@ impl<'a> Typechecker<'a> {
                     Err(err) =>
                         Err(TypeError::let_failure(r.clone(), x, e1, err)),
                 },
-            &Expr::LetIn(ref r, x, Some(ref ty), e1, e2) => {
-                if let Err(err) = self.check(ctx, e1, ty) {
+            &Expr::LetIn(ref r, x, Some(ref e1_ty), e1, e2) => {
+                if let Err(err) = self.check(ctx, e1, e1_ty) {
                     return Err(TypeError::LetCheckFailure {
                         range: r.clone(),
                         var: x,
-                        expected_type: ty.clone(),
+                        expected_type: e1_ty.clone(),
                         expr: e1,
                         err: Box::new(err)
                     });
                 }
-                let new_ctx = ctx.clone().with_var(x, ty.clone());
+                let new_ctx = ctx.clone().with_var(x, e1_ty.clone());
                 self.synthesize(&new_ctx, e2)
             },
             &Expr::UnPair(ref r, x1, x2, e0, e) =>
@@ -985,7 +1039,17 @@ impl<'a> Typechecker<'a> {
                     },
                     ty =>
                         Err(TypeError::unpairing_non_product(r.clone(), e0, ty)),
-                }
+                },
+            &Expr::ExElim(ref r, c, x, e0, e) =>
+                match self.synthesize(ctx, e0)? {
+                    Type::Exists(d, ty) => {
+                        let ty_substed = ty.subst(d, &ToSubst::Clock(Clock::from_var(c)), self.interner);
+                        let new_ctx = ctx.clone().with_type_var(c, Kind::Clock).with_var(x, ty_substed);
+                        self.synthesize(&new_ctx, e)
+                    },
+                    ty =>
+                        Err(TypeError::ExElimNonExists { range: r.clone(), expr: e0, actual_type: ty }),
+                },
             &Expr::Case(ref r, e0, x1, e1, x2, e2) =>
                 match self.synthesize(ctx, e0)? {
                     Type::Sum(ty1, ty2) => {
@@ -1016,7 +1080,8 @@ impl<'a> Typechecker<'a> {
                     ty =>
                         Err(TypeError::UnboxingNonBox { range: r.clone(), expr: e, actual_type: ty }),
                 },
-            &Expr::ClockApp(ref r, e, c) => 
+            &Expr::ClockApp(ref r, e, c) =>
+                // TODO: check validity of c
                 match self.synthesize(ctx, e)? {
                     Type::Forall(x, Kind::Clock, ty) =>
                         Ok(ty.subst(x, &ToSubst::Clock(c), self.interner)),
@@ -1203,6 +1268,14 @@ fn subtype(ctx: &Ctx, ty1: &Type, ty2: &Type, interner: &mut DefaultStringIntern
         },
         (&Type::TypeVar(x1), &Type::TypeVar(x2)) =>
             x1 == x2,
+        (&Type::Exists(x1, ref ty1p), &Type::Exists(x2, ref ty2p)) => {
+            let fresh_name = mk_fresh(x1, interner);
+            let replacement = ToSubst::from_var(fresh_name, Kind::Clock);
+            let ty1p_subst = ty1p.subst(x1, &replacement, interner);
+            let ty2p_subst = ty2p.subst(x2, &replacement, interner);
+            let new_ctx = Ctx::TypeVar(fresh_name, Kind::Clock, Rc::new(ctx.clone()));
+            subtype(&new_ctx, &ty1p_subst, &ty2p_subst, interner)
+        },
         (_, _) =>
             false,
     }

@@ -97,6 +97,8 @@ make_node_enum!(ConcreteNode {
     ClockAppExpression: clockapp_expression,
     TypeAppExpression: typeapp_expression,
     BinopExpression: binop_expression,
+    ExIntro: ex_intro,
+    ExElim: ex_elim,
     Type: type,
     WrapType: wrap_type,
     BaseType: base_type,
@@ -109,6 +111,7 @@ make_node_enum!(ConcreteNode {
     BoxType: box_type,
     ForallType: forall_type,
     VarType: var_type,
+    ExType: ex_type,
     Kind: kind
 } with matcher ConcreteNodeMatcher);
 
@@ -136,7 +139,9 @@ make_field_enum!(Field {
     Ret: ret,
     Size: size,
     Coeff: coeff,
-    Kind: kind
+    Kind: kind,
+    BinderClock: binderclock,
+    BinderExpr: binderexpr
 } with matcher ConcreteFieldMatcher);
 
 pub struct Parser<'a, 'b> {
@@ -424,6 +429,18 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
                 let e2 = self.parse_expr(self.field(node, Field::Right))?;
                 Ok(Expr::Binop(node.range(), op, self.alloc(e1), self.alloc(e2)))
             },
+            Some(ConcreteNode::ExIntro) => {
+                let c = self.parse_clock(self.field(node, Field::Clock))?;
+                let e = self.parse_expr(self.field(node, Field::Expr))?;
+                Ok(Expr::ExIntro(node.range(), c, self.alloc(e)))
+            },
+            Some(ConcreteNode::ExElim) => {
+                let c = self.identifier(self.field(node, Field::BinderClock));
+                let x = self.identifier(self.field(node, Field::BinderExpr));
+                let e1 = self.parse_expr(self.field(node, Field::Bound))?;
+                let e2 = self.parse_expr(self.field(node, Field::Body))?;
+                Ok(Expr::ExElim(node.range(), c, x, self.alloc(e1), self.alloc(e2)))
+            },
             Some(_) =>
                 Err(ParseError::ExpectedExpression(node.range())),
             None => 
@@ -488,6 +505,11 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
             Some(ConcreteNode::VarType) => {
                 let x = self.identifier(node);
                 Ok(Type::TypeVar(x))
+            },
+            Some(ConcreteNode::ExType) => {
+                let c = self.identifier(self.field(node, Field::Binder));
+                let ty = self.parse_type(self.field(node, Field::Type))?;
+                Ok(Type::Exists(c, Box::new(ty)))
             },
             Some(_) =>
                 Err(ParseError::ExpectedType(node.range())),

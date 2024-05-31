@@ -105,6 +105,8 @@ pub enum Expr<'a, R> {
     ClockApp(R, &'a Expr<'a, R>, Clock),
     TypeApp(R, &'a Expr<'a, R>, Type),
     Binop(R, Binop, &'a Expr<'a, R>, &'a Expr<'a, R>),
+    ExIntro(R, Clock, &'a Expr<'a, R>),
+    ExElim(R, Symbol, Symbol, &'a Expr<'a, R>, &'a Expr<'a, R>),
 }
 
 impl<'a, R> Expr<'a, R> {
@@ -132,6 +134,8 @@ impl<'a, R> Expr<'a, R> {
             Expr::ClockApp(ref r, ref e, c) => Expr::ClockApp(f(r), arena.alloc(e.map_ext(arena, f)), c),
             Expr::TypeApp(ref r, ref e, ref ty) => Expr::TypeApp(f(r), arena.alloc(e.map_ext(arena, f)), ty.clone()),
             Expr::Binop(ref r, op, ref e1, ref e2) => Expr::Binop(f(r), op, arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
+            Expr::ExIntro(ref r, c, ref e) => Expr::ExIntro(f(r), c, arena.alloc(e.map_ext(arena, f))),
+            Expr::ExElim(ref r, x1, x2, ref e1, ref e2) => Expr::ExElim(f(r), x1, x2, arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
         }
     }
 
@@ -163,6 +167,8 @@ impl<'a, R> Expr<'a, R> {
             Expr::ClockApp(ref r, _, _) => r,
             Expr::TypeApp(ref r, _, _) => r,
             Expr::Binop(ref r, _, _, _) => r,
+            Expr::ExIntro(ref r, _, _) => r,
+            Expr::ExElim(ref r, _, _, _, _) => r,
         }
     }
 }
@@ -249,6 +255,10 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
                 write!(f, "TypeApp({}, {})", self.for_expr(e), self.for_type(ty)),
             Expr::Binop(_, op, ref e1, ref e2) =>
                 write!(f, "Binop({:?}, {}, {})", op, self.for_expr(e1), self.for_expr(e2)),
+            Expr::ExIntro(_, c, ref e) =>
+                write!(f, "ExIntro({}, {})", self.for_clock(&c), self.for_expr(e)),
+            Expr::ExElim(_, x1, x2, ref e1, ref e2) =>
+                write!(f, "ExElim({}, {}, {}, {})", self.name(x1), self.name(x2), self.for_expr(e1), self.for_expr(e2)),
         }
     }
 }

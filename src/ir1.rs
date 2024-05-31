@@ -464,7 +464,16 @@ impl<'a> Translator<'a> {
                 let e1p = self.translate(ctx.clone(), e1);
                 let e2p = self.translate(ctx, e2);
                 Expr::Op(Op::from_binop(op), self.alloc_slice([self.alloc(e1p), self.alloc(e2p)]))
-            }
+            },
+            HExpr::ExIntro(_, _, e) =>
+                // TODO: will probably need to package up the clock somehow
+                self.translate(ctx, e),
+            HExpr::ExElim(_, _, x, e1, e2) => {
+                let e1t = self.translate(ctx.clone(), e1);
+                let new_ctx = Rc::new(Ctx::Var(x, ctx));
+                let e2t = self.translate(new_ctx, e2);
+                Expr::LetIn(self.alloc(e1t), self.alloc(e2t))
+            },
         }
     }
 

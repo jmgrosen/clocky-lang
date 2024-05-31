@@ -183,6 +183,9 @@ pub fn interp<'a, 'b>(ctx: &InterpretationContext<'a, 'b>, expr: &'a Expr<'a, ()
             interp(ctx, e),
         Expr::Binop(_, op, e1, e2) =>
             interp_binop(op, interp(ctx, e1)?, interp(ctx, e2)?),
+        Expr::ExIntro(_, _, _) |
+        Expr::ExElim(_, _, _, _, _) =>
+            panic!("lol i've abandoned the interpreter"),
     }
 }
 

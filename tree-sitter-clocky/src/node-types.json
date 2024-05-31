@@ -408,6 +408,104 @@
     }
   },
   {
+    "type": "ex_elim",
+    "named": true,
+    "fields": {
+      "binderclock": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "binderexpr": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      },
+      "bound": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "ex_intro",
+    "named": true,
+    "fields": {
+      "clock": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "clock",
+            "named": true
+          }
+        ]
+      },
+      "expr": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "ex_type",
+    "named": true,
+    "fields": {
+      "binder": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "expression",
     "named": true,
     "fields": {},
@@ -445,6 +543,14 @@
         },
         {
           "type": "delay_expression",
+          "named": true
+        },
+        {
+          "type": "ex_elim",
+          "named": true
+        },
+        {
+          "type": "ex_intro",
           "named": true
         },
         {
@@ -1019,6 +1125,10 @@
           "named": true
         },
         {
+          "type": "ex_type",
+          "named": true
+        },
+        {
           "type": "forall_type",
           "named": true
         },
@@ -1369,6 +1479,10 @@
     "named": false
   },
   {
+    "type": "?",
+    "named": false
+  },
+  {
     "type": "@",
     "named": false
   },
@@ -1394,6 +1508,10 @@
   },
   {
     "type": "`",
+    "named": false
+  },
+  {
+    "type": "and",
     "named": false
   },
   {
@@ -1446,11 +1564,11 @@
   },
   {
     "type": "sample",
-    "named": false
+    "named": true
   },
   {
     "type": "sample",
-    "named": true
+    "named": false
   },
   {
     "type": "type",
