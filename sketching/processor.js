@@ -14,7 +14,7 @@ class ClockyStreamProcessor extends AudioWorkletProcessor {
         console.log("instantiated");
         this.instance = instance;
         this.first = true;
-        this.stream = instance.exports.main;
+        this.stream = instance.exports.apply_clock(instance.exports.main, 0);
         this.samples_ptr = instance.exports.alloc(4 * 128);
       });
     };

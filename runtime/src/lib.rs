@@ -2,6 +2,7 @@
 
 use core::arch::wasm32;
 use core::ptr;
+use core::mem;
 use core::slice;
 
 pub type ClockyFunc = extern "C" fn(*const Closure) -> *const ();
@@ -42,6 +43,13 @@ pub unsafe extern "C" fn sample(mut s: *const Stream, n: u32, out_ptr: *mut f32)
         s = adv_stream(s);
     }
     s
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn apply_clock(clos: *const Closure, clk: *const ()) -> *const () {
+    assert_eq!((*clos).arity, 1);
+    let func: extern "C" fn(*const Closure, *const ()) -> *const () = mem::transmute((*clos).func);
+    func(clos, clk)
 }
 
 #[cfg(not(test))]
