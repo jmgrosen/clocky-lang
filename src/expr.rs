@@ -107,6 +107,11 @@ pub enum Expr<'a, R> {
     Binop(R, Binop, &'a Expr<'a, R>, &'a Expr<'a, R>),
     ExIntro(R, Clock, &'a Expr<'a, R>),
     ExElim(R, Symbol, Symbol, &'a Expr<'a, R>, &'a Expr<'a, R>),
+    // below this are expressions that are not exposed in the surface syntax
+
+    // TODO: this Symbol is in the typevar namespace. we should have
+    // newtypes for typevar vs termvar namespaces
+    ClockLam(R, Symbol, &'a Expr<'a, R>),
 }
 
 impl<'a, R> Expr<'a, R> {
@@ -136,6 +141,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::Binop(ref r, op, ref e1, ref e2) => Expr::Binop(f(r), op, arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
             Expr::ExIntro(ref r, c, ref e) => Expr::ExIntro(f(r), c, arena.alloc(e.map_ext(arena, f))),
             Expr::ExElim(ref r, x1, x2, ref e1, ref e2) => Expr::ExElim(f(r), x1, x2, arena.alloc(e1.map_ext(arena, f)), arena.alloc(e2.map_ext(arena, f))),
+            Expr::ClockLam(ref r, x, e) => Expr::ClockLam(f(r), x, arena.alloc(e.map_ext(arena, f))),
         }
     }
 
@@ -169,6 +175,7 @@ impl<'a, R> Expr<'a, R> {
             Expr::Binop(ref r, _, _, _) => r,
             Expr::ExIntro(ref r, _, _) => r,
             Expr::ExElim(ref r, _, _, _, _) => r,
+            Expr::ClockLam(ref r, _, _) => r,
         }
     }
 }
@@ -259,6 +266,8 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
                 write!(f, "ExIntro({}, {})", self.for_clock(&c), self.for_expr(e)),
             Expr::ExElim(_, x1, x2, ref e1, ref e2) =>
                 write!(f, "ExElim({}, {}, {}, {})", self.name(x1), self.name(x2), self.for_expr(e1), self.for_expr(e2)),
+            Expr::ClockLam(_, x, e) =>
+                write!(f, "ClockLam({}, {})", self.name(x), self.for_expr(e)),
         }
     }
 }

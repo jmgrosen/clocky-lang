@@ -576,6 +576,10 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             (Op::LoadGlobal(Global(g)), _) => {
                 self.insns.push(wasm::Instruction::GlobalGet(self.translator.globals_offset + g));
             },
+            (Op::ApplyCoeff(_coeff), &[clock]) => {
+                // TODO: actually apply the coefficient
+                self.translate(ctx, clock);
+            },
             _ =>
                 panic!("did not expect {} arguments for op {:?}", args.len(), op)
         }

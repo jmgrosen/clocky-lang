@@ -1,6 +1,7 @@
 use std::{rc::Rc, collections::{HashMap, HashSet}, fmt};
 
 use imbl as im;
+use num::rational::Ratio;
 
 use crate::expr::{Expr as HExpr, Symbol, Value as HValue, Binop as HBinop};
 use crate::util::ArenaPlus;
@@ -121,6 +122,7 @@ pub enum Op {
     AllocAndFill,
     BuildClosure(Global),
     LoadGlobal(Global),
+    ApplyCoeff(Ratio<u32>),
 }
 
 impl Op {
@@ -196,6 +198,7 @@ impl Op {
             Op::AllocAndFill => None,
             Op::BuildClosure(_) => None,
             Op::LoadGlobal(_) => Some(0),
+            Op::ApplyCoeff(_) => Some(1),
         }
     }
 }
@@ -298,26 +301,45 @@ impl<'a> Expr<'a> {
 
 pub struct Translator<'a> {
     pub globals: HashMap<Symbol, Global>,
+    pub global_clocks: HashMap<Symbol, Global>,
     pub arena: &'a ArenaPlus<'a, Expr<'a>>,
 }
 
 pub enum Ctx {
     Empty,
-    Var(Symbol, Rc<Ctx>),
+    TermVar(Symbol, Rc<Ctx>),
+    ClockVar(Symbol, Rc<Ctx>),
     Silent(Rc<Ctx>),
 }
 
 impl Ctx {
-    fn lookup(&self, x: Symbol) -> Option<DebruijnIndex> {
+    fn lookup_termvar(&self, x: Symbol) -> Option<DebruijnIndex> {
         match *self {
             Ctx::Empty =>
                 None,
-            Ctx::Var(y, _) if x == y =>
+            Ctx::TermVar(y, _) if x == y =>
                 Some(DebruijnIndex::HERE),
-            Ctx::Var(_, ref next) =>
-                next.lookup(x).map(|i| i.shifted()),
+            Ctx::TermVar(_, ref next) =>
+                next.lookup_termvar(x).map(|i| i.shifted()),
+            Ctx::ClockVar(_, ref next) =>
+                next.lookup_termvar(x).map(|i| i.shifted()),
             Ctx::Silent(ref next) =>
-                next.lookup(x).map(|i| i.shifted()),
+                next.lookup_termvar(x).map(|i| i.shifted()),
+        }
+    }
+
+    fn lookup_clockvar(&self, x: Symbol) -> Option<DebruijnIndex> {
+        match *self {
+            Ctx::Empty =>
+                None,
+            Ctx::TermVar(_, ref next) =>
+                next.lookup_clockvar(x).map(|i| i.shifted()),
+            Ctx::ClockVar(y, _) if x == y =>
+                Some(DebruijnIndex::HERE),
+            Ctx::ClockVar(_, ref next) =>
+                next.lookup_clockvar(x).map(|i| i.shifted()),
+            Ctx::Silent(ref next) =>
+                next.lookup_clockvar(x).map(|i| i.shifted()),
         }
     }
 }
@@ -334,7 +356,7 @@ impl<'a> Translator<'a> {
     pub fn translate<'b, R>(&self, ctx: Rc<Ctx>, expr: &'b HExpr<'b, R>) -> Expr<'a> {
         match *expr {
             HExpr::Var(_, x) =>
-                if let Some(idx) = ctx.lookup(x) {
+                if let Some(idx) = ctx.lookup_termvar(x) {
                     Expr::Var(idx)
                 } else if let Some(&glob) = self.globals.get(&x) {
                     Expr::Glob(glob)
@@ -352,7 +374,7 @@ impl<'a> Translator<'a> {
             HExpr::Annotate(_, next, _) =>
                 self.translate(ctx, next),
             HExpr::Lam(_, x, next) => {
-                let new_ctx = Rc::new(Ctx::Var(x, ctx));
+                let new_ctx = Rc::new(Ctx::TermVar(x, ctx));
                 Expr::Lam(None, 1, self.alloc(self.translate(new_ctx, next)))
             },
             HExpr::App(_, e1, e2) => {
@@ -365,7 +387,7 @@ impl<'a> Translator<'a> {
                 Expr::Adv(self.alloc(et))
             },
             HExpr::Lob(_, _, x, e) => {
-                let new_ctx = Rc::new(Ctx::Var(x, ctx));
+                let new_ctx = Rc::new(Ctx::TermVar(x, ctx));
                 let et = self.translate(new_ctx, e);
                 Expr::Lob(None, self.alloc(et))
             },
@@ -376,7 +398,7 @@ impl<'a> Translator<'a> {
             },
             HExpr::LetIn(_, x, _, e1, e2) => {
                 let e1t = self.translate(ctx.clone(), e1);
-                let new_ctx = Rc::new(Ctx::Var(x, ctx));
+                let new_ctx = Rc::new(Ctx::TermVar(x, ctx));
                 let e2t = self.translate(new_ctx, e2);
                 Expr::LetIn(self.alloc(e1t), self.alloc(e2t))
             },
@@ -390,7 +412,7 @@ impl<'a> Translator<'a> {
                 // in the high level language? i guess somewhat
                 // because i don't have patterns
                 let e1t = self.translate(ctx.clone(), e1);
-                let new_ctx = Rc::new(Ctx::Var(x2, Rc::new(Ctx::Var(x1, Rc::new(Ctx::Silent(ctx))))));
+                let new_ctx = Rc::new(Ctx::TermVar(x2, Rc::new(Ctx::TermVar(x1, Rc::new(Ctx::Silent(ctx))))));
                 let e2t = self.translate(new_ctx, e2);
                 Expr::LetIn(self.alloc(e1t), self.alloc(
                     Expr::LetIn(self.alloc(
@@ -415,9 +437,9 @@ impl<'a> Translator<'a> {
             HExpr::Case(_, e0, x1, e1, x2, e2) => {
                 let e0t = self.translate(ctx.clone(), e0);
                 let new_ctx = Rc::new(Ctx::Silent(ctx));
-                let new_ctx1 = Rc::new(Ctx::Var(x1, new_ctx.clone()));
+                let new_ctx1 = Rc::new(Ctx::TermVar(x1, new_ctx.clone()));
                 let e1t = self.translate(new_ctx1, e1);
-                let new_ctx2 = Rc::new(Ctx::Var(x2, new_ctx));
+                let new_ctx2 = Rc::new(Ctx::TermVar(x2, new_ctx));
                 let e2t = self.translate(new_ctx2, e2);
                 // TODO: should really make this the same abstraction level as InL/InR...
                 Expr::LetIn(
@@ -455,9 +477,19 @@ impl<'a> Translator<'a> {
                 let et = self.translate(ctx, e);
                 Expr::Unbox(self.alloc(et))
             },
-            HExpr::ClockApp(_, e, _) =>
-                // for now...
-                self.translate(ctx, e),
+            HExpr::ClockApp(_, e, c) => {
+                // TODO: factor out this lookup logic
+                let c_var_expr = self.alloc(if let Some(idx) = ctx.lookup_clockvar(c.var) {
+                    Expr::Var(idx)
+                } else if let Some(&glob) = self.global_clocks.get(&c.var) {
+                    Expr::Glob(glob)
+                } else {
+                    panic!("couldn't find clock var??")
+                });
+                let c_expr = self.alloc(Expr::Op(Op::ApplyCoeff(c.coeff), self.alloc_slice([c_var_expr])));
+                let et = self.alloc(self.translate(ctx, e));
+                Expr::App(et, self.alloc_slice([c_expr]))
+            },
             HExpr::TypeApp(_, e, _) =>
                 self.translate(ctx, e),
             HExpr::Binop(_, op, e1, e2) => {
@@ -470,9 +502,14 @@ impl<'a> Translator<'a> {
                 self.translate(ctx, e),
             HExpr::ExElim(_, _, x, e1, e2) => {
                 let e1t = self.translate(ctx.clone(), e1);
-                let new_ctx = Rc::new(Ctx::Var(x, ctx));
+                let new_ctx = Rc::new(Ctx::TermVar(x, ctx));
                 let e2t = self.translate(new_ctx, e2);
                 Expr::LetIn(self.alloc(e1t), self.alloc(e2t))
+            },
+            HExpr::ClockLam(_, x, e) => {
+                let new_ctx = Rc::new(Ctx::ClockVar(x, ctx));
+                let et = self.translate(new_ctx, e);
+                Expr::Lam(None, 1, self.alloc(et))
             },
         }
     }

@@ -790,10 +790,14 @@ impl<'a, 'b, R: Clone> Typechecker<'a, 'b, R> {
     pub fn check<'c>(&mut self, ctx: &Ctx, expr: &'c Expr<'c, R>, ty: &Type) -> Result<&'b Expr<'b, R>, TypeError<'c, R>> {
         match (ty, expr) {
             // CAREFUL! positioning this here matters, with respect to
-            // the other non-expression-syntax-guided rules
+            // the other non-type-syntax-guided rules
             // (particlarly lob)
-            (&Type::Forall(x, k, ref ty), _) =>
-                self.check(&Ctx::TypeVar(x, k, Rc::new(ctx.clone())), expr, ty),
+            (&Type::Forall(x, Kind::Type, ref ty), _) =>
+                self.check(&Ctx::TypeVar(x, Kind::Type, Rc::new(ctx.clone())), expr, ty),
+            (&Type::Forall(x, Kind::Clock, ref ty), _) => {
+                let expr_elab = self.check(&Ctx::TypeVar(x, Kind::Clock, Rc::new(ctx.clone())), expr, ty)?;
+                Ok(self.alloc(Expr::ClockLam(expr_elab.range().clone(), x, expr_elab)))
+            },
             (&Type::Unit, &Expr::Val(ref r, Value::Unit)) =>
                 Ok(self.alloc(Expr::Val(r.clone(), Value::Unit))),
             (&Type::Function(ref ty1, ref ty2), &Expr::Lam(ref r, x, e)) => {
@@ -1200,6 +1204,10 @@ impl<'a, 'b, R: Clone> Typechecker<'a, 'b, R> {
                 TopLevelDefKind::Let => &running_ctx,
                 TopLevelDefKind::Def => &Ctx::Empty,
             };
+            // TODO: add clock globals to this somehow
+            if let Err(missing_symbol) = def.type_.check_validity(ctx) {
+                errs.push(TopLevelTypeError::InvalidType(def.name, def.type_.clone(), missing_symbol));
+            }
             match self.check(ctx, &def.body, &def.type_) {
                 Ok(body_elab) => {
                     defs.push(TopLevelDef { body: body_elab, ..def.clone() });
@@ -1234,6 +1242,7 @@ impl<'a, 'b, R: Clone> Typechecker<'a, 'b, R> {
 pub enum TopLevelTypeError<'b, R> {
     TypeError(Symbol, TypeError<'b, R>),
     CannotRedefine(Symbol, R),
+    InvalidType(Symbol, Type, Symbol),
 }
 
 #[derive(Debug)]
@@ -1263,6 +1272,9 @@ impl<'b> fmt::Display for PrettyFileTypeErrors<'b, tree_sitter::Range> {
                            err.pretty(self.interner, self.code))?,
                 TopLevelTypeError::CannotRedefine(name, _) =>
                     write!(f, "cannot redefine \"{}\"", self.interner.resolve(name).unwrap())?,
+                TopLevelTypeError::InvalidType(name, ref ty, missing) =>
+                    write!(f, "the type \"{}\" of definition \"{}\" is invalid as the clock/type variable \"{}\" is not in the context",
+                           ty.pretty(self.interner), self.interner.resolve(name).unwrap(), self.interner.resolve(missing).unwrap())?,
             }
         }
         Ok(())

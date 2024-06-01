@@ -338,7 +338,7 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
     let expr_under_arena = Arena::new();
     let expr_ptr_arena = Arena::new();
     let expr_arena = util::ArenaPlus { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
-    let translator = ir1::Translator { globals: builtin_globals, arena: &expr_arena };
+    let translator = ir1::Translator { globals: builtin_globals, global_clocks: HashMap::new(), arena: &expr_arena };
 
     
     let mut main = None;
