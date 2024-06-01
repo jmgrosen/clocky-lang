@@ -112,7 +112,7 @@ pub fn compile(code: String) -> Result<Vec<u8>, String> {
     let expr_under_arena = Arena::new();
     let expr_ptr_arena = Arena::new();
     let expr_arena = util::ArenaPlus { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
-    let translator = ir1::Translator { globals: builtin_globals, arena: &expr_arena };
+    let translator = ir1::Translator { globals: builtin_globals, global_clocks: HashMap::new(), arena: &expr_arena };
 
     
     let mut main = None;
