@@ -78,6 +78,9 @@ builtins!(
     cast[1]
       { &[Value::Index(i)] => Ok(Value::Sample(i as f32)) }
       [ &ir2::Expr::Op(Op::CastI2F, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+    since_tick[1]
+      { &[_] => panic!("oops no interpreter") }
+      [ &ir2::Expr::Op(Op::SinceLastTickStream, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
 );
 
 pub type BuiltinsMap = HashMap<Symbol, Builtin>;

@@ -76,6 +76,9 @@ pub fn compile(code: String) -> Result<Vec<u8>, String> {
     globals.insert(reinterpi, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
     globals.insert(reinterpf, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Index)));
     globals.insert(cast, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
+    let since_tick = interner.get_or_intern_static("since_tick");
+    let c = interner.get_or_intern_static("c");
+    globals.insert(since_tick, typing::Type::Forall(c, Kind::Clock, Box::new(typing::Type::Stream(typing::Clock::from_var(c), Box::new(typing::Type::Sample)))));
 
     let mut toplevel = TopLevel { arena: &annot_arena, interner, globals };
 

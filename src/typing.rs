@@ -53,7 +53,7 @@ impl Clock {
         PrettyClock { interner, clock: self }
     }
 
-    fn from_var(var: Symbol) -> Clock {
+    pub fn from_var(var: Symbol) -> Clock {
         Clock { coeff: One::one(), var }
     }
 

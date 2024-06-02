@@ -123,6 +123,7 @@ pub enum Op {
     BuildClosure(Global),
     LoadGlobal(Global),
     ApplyCoeff(Ratio<u32>),
+    SinceLastTickStream,
 }
 
 impl Op {
@@ -199,6 +200,7 @@ impl Op {
             Op::BuildClosure(_) => None,
             Op::LoadGlobal(_) => Some(0),
             Op::ApplyCoeff(_) => Some(1),
+            Op::SinceLastTickStream => Some(1),
         }
     }
 }

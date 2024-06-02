@@ -580,6 +580,10 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 // TODO: actually apply the coefficient
                 self.translate(ctx, clock);
             },
+            (Op::SinceLastTickStream, &[clock]) => {
+                self.translate(ctx, clock);
+                self.insns.push(wasm::Instruction::Call(self.translator.runtime_exports["since_last_tick_stream"].1));
+            },
             _ =>
                 panic!("did not expect {} arguments for op {:?}", args.len(), op)
         }

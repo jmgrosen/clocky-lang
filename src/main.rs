@@ -358,10 +358,10 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
         let expr_ir2 = translator2.translate(expr);
         let def_idx = translator.globals[&name].0 as usize;
         if name == toplevel.interner.get_or_intern_static("main") {
-            println!("found main: {def_idx}");
             main = Some(def_idx);
         }
         translator2.globals[def_idx] = ir2::GlobalDef::ClosedExpr { body: expr_ir2 };
+        println!("{}: {:?}", toplevel.interner.resolve(name).unwrap(), expr_ir2);
     }
 
     for (i, func) in translator2.globals.iter().enumerate() {
@@ -509,6 +509,9 @@ fn main() -> Result<(), ExitCode> {
     globals.insert(reinterpi, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
     globals.insert(reinterpf, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Index)));
     globals.insert(cast, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
+    let since_tick = interner.get_or_intern_static("since_tick");
+    let c = interner.get_or_intern_static("c");
+    globals.insert(since_tick, typing::Type::Forall(c, Kind::Clock, Box::new(typing::Type::Stream(typing::Clock::from_var(c), Box::new(typing::Type::Sample)))));
 
     let mut toplevel = TopLevel { arena: &annot_arena, interner, globals };
 

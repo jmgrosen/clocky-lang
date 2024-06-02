@@ -24,6 +24,11 @@ pub struct Stream {
     tail: *const Closure,
 }
 
+#[repr(C)]
+pub struct Clock {
+    since_last_tick: f32,
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hd_stream(s: *const Stream) -> f32 {
     *(*s).head
@@ -48,8 +53,34 @@ pub unsafe extern "C" fn sample(mut s: *const Stream, n: u32, out_ptr: *mut f32)
 #[no_mangle]
 pub unsafe extern "C" fn apply_clock(clos: *const Closure, clk: *const ()) -> *const () {
     assert_eq!((*clos).arity, 1);
-    let func: extern "C" fn(*const Closure, *const ()) -> *const () = mem::transmute((*clos).func);
-    func(clos, clk)
+    // TODO: fix this ordering in the compiler...?
+    let func: extern "C" fn(*const (), *const Closure) -> *const () = mem::transmute((*clos).func);
+    func(clk, clos)
+}
+
+// TODO: warning: be wary with alignment with this... maybe should do repr(packed)?
+#[repr(C)]
+struct SinceLastTickClosure {
+    clos: Closure,
+    clock: *const Clock,
+}
+
+unsafe extern "C" fn since_last_tick_closure(self_: *const SinceLastTickClosure) -> *const Stream {
+    let st: *mut Stream = mem::transmute(alloc(mem::size_of::<Stream>() as u32));
+    let val: *mut f32 = mem::transmute(alloc(mem::size_of::<f32>() as u32));
+    *val = (*(*self_).clock).since_last_tick;
+    (*st).head = val;
+    (*st).tail = mem::transmute(self_);
+    st
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn since_last_tick_stream(clock: *const Clock) -> *const Stream {
+    let clos: *mut SinceLastTickClosure = mem::transmute(alloc(mem::size_of::<SinceLastTickClosure>() as u32));
+    (*clos).clos.func = mem::transmute(since_last_tick_closure as unsafe extern "C" fn(*const SinceLastTickClosure) -> *const Stream);
+    (*clos).clos.arity = 0;
+    (*clos).clock = clock;
+    since_last_tick_closure(clos)
 }
 
 #[cfg(not(test))]
