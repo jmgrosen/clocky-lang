@@ -572,6 +572,7 @@ pub enum TypeError<'a, R> {
     InvalidType { range: R, purported_type: Type, bad_symbol: Symbol },
     InvalidClock { range: R, purported_clock: Clock, bad_symbol: Symbol },
     ExElimNonExists { range: R, expr: &'a Expr<'a, R>, actual_type: Type },
+    TypeVariableShadowing { range: R, expr: &'a Expr<'a, R>, bad_symbol: Symbol, type_: Type },
 }
 
 impl<'a, R> TypeError<'a, R> {
@@ -740,6 +741,9 @@ impl<'a> PrettyTypeError<'a, tree_sitter::Range> {
             TypeError::ExElimNonExists { expr, ref actual_type, .. } =>
                 write!(f, "trying to exists-elim expression \"{}\" of type \"{}\", which is not an exists",
                        self.for_expr(expr), self.for_type(actual_type)),
+            TypeError::TypeVariableShadowing { expr, bad_symbol, ref type_, .. } =>
+                write!(f, "trying to shadow type/clock variable \"{}\" when trying to check type \"{}\" against expression \"{}\"",
+                       self.interner.resolve(bad_symbol).unwrap(), self.for_type(type_), self.for_expr(expr)),
         }
     }
 }
@@ -792,10 +796,27 @@ impl<'a, 'b, R: Clone> Typechecker<'a, 'b, R> {
             // CAREFUL! positioning this here matters, with respect to
             // the other non-type-syntax-guided rules
             // (particlarly lob)
-            (&Type::Forall(x, Kind::Type, ref ty), _) =>
-                self.check(&Ctx::TypeVar(x, Kind::Type, Rc::new(ctx.clone())), expr, ty),
-            (&Type::Forall(x, Kind::Clock, ref ty), _) => {
-                let expr_elab = self.check(&Ctx::TypeVar(x, Kind::Clock, Rc::new(ctx.clone())), expr, ty)?;
+            (&Type::Forall(x, Kind::Type, ref inner_ty), _) => {
+                if ctx.lookup_type_var(x).is_some() {
+                    return Err(TypeError::TypeVariableShadowing {
+                        range: expr.range().clone(),
+                        expr,
+                        bad_symbol: x,
+                        type_: ty.clone(),
+                    });
+                }
+                self.check(&Ctx::TypeVar(x, Kind::Type, Rc::new(ctx.clone())), expr, inner_ty)
+            },
+            (&Type::Forall(x, Kind::Clock, ref inner_ty), _) => {
+                if ctx.lookup_type_var(x).is_some() {
+                    return Err(TypeError::TypeVariableShadowing {
+                        range: expr.range().clone(),
+                        expr,
+                        bad_symbol: x,
+                        type_: ty.clone(),
+                    });
+                }
+                let expr_elab = self.check(&Ctx::TypeVar(x, Kind::Clock, Rc::new(ctx.clone())), expr, inner_ty)?;
                 Ok(self.alloc(Expr::ClockLam(expr_elab.range().clone(), x, expr_elab)))
             },
             (&Type::Unit, &Expr::Val(ref r, Value::Unit)) =>
@@ -860,7 +881,15 @@ impl<'a, 'b, R: Clone> Typechecker<'a, 'b, R> {
                     (_, ty) =>
                         Err(TypeError::unpairing_non_product(r.clone(), e0, ty)),
                 },
-            (_, &Expr::ExElim(ref r, c, x, e0, e)) =>
+            (_, &Expr::ExElim(ref r, c, x, e0, e)) => {
+                if ctx.lookup_type_var(c).is_some() {
+                    return Err(TypeError::TypeVariableShadowing {
+                        range: expr.range().clone(),
+                        expr,
+                        bad_symbol: c,
+                        type_: ty.clone(),
+                    });
+                }
                 match self.synthesize(ctx, e0)? {
                     (e0_elab, Type::Exists(d, ty_var)) => {
                         let ty_substed = ty_var.subst(d, &ToSubst::Clock(Clock::from_var(c)), self.interner);
@@ -870,7 +899,8 @@ impl<'a, 'b, R: Clone> Typechecker<'a, 'b, R> {
                     },
                     (_, ty) =>
                         Err(TypeError::ExElimNonExists { range: r.clone(), expr: e0, actual_type: ty }),
-                },
+                }
+            },
             (&Type::Sum(ref ty1, _), &Expr::InL(ref r, e)) => {
                 let e_elab = self.check(ctx, e, ty1)?;
                 Ok(self.alloc(Expr::InL(r.clone(), e_elab)))
