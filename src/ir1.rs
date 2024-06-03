@@ -67,6 +67,7 @@ pub enum Con {
     Pair,
     InL,
     InR,
+    ClockEx,
 }
 
 impl Con {
@@ -79,6 +80,7 @@ impl Con {
             Con::Pair => Some(2),
             Con::InL => Some(1),
             Con::InR => Some(1),
+            Con::ClockEx => Some(2),
         }
     }
 }
@@ -117,6 +119,7 @@ pub enum Op {
     ReinterpF2I,
     ReinterpI2F,
     CastI2F,
+    // TODO: make this a more informative index?
     Proj(u32),
     UnGen,
     AllocAndFill,
@@ -499,14 +502,31 @@ impl<'a> Translator<'a> {
                 let e2p = self.translate(ctx, e2);
                 Expr::Op(Op::from_binop(op), self.alloc_slice([self.alloc(e1p), self.alloc(e2p)]))
             },
-            HExpr::ExIntro(_, _, e) =>
-                // TODO: will probably need to package up the clock somehow
-                self.translate(ctx, e),
-            HExpr::ExElim(_, _, x, e1, e2) => {
-                let e1t = self.translate(ctx.clone(), e1);
-                let new_ctx = Rc::new(Ctx::TermVar(x, ctx));
-                let e2t = self.translate(new_ctx, e2);
-                Expr::LetIn(self.alloc(e1t), self.alloc(e2t))
+            HExpr::ExIntro(_, c, e) => {
+                // TODO: factor out this lookup logic
+                let c_var_expr = self.alloc(if let Some(idx) = ctx.lookup_clockvar(c.var) {
+                    Expr::Var(idx)
+                } else if let Some(&glob) = self.global_clocks.get(&c.var) {
+                    Expr::Glob(glob)
+                } else {
+                    panic!("couldn't find clock var??")
+                });
+                let c_expr = self.alloc(Expr::Op(Op::ApplyCoeff(c.coeff), self.alloc_slice([c_var_expr])));
+                let et = self.alloc(self.translate(ctx, e));
+                Expr::Con(Con::ClockEx, self.alloc_slice([c_expr, et]))
+            },
+            HExpr::ExElim(_, c, x, e1, e2) => {
+                let e1t = self.alloc(self.translate(ctx.clone(), e1));
+                let new_ctx = Ctx::TermVar(x, Ctx::ClockVar(c, Ctx::Silent(ctx).into()).into()).into();
+                let e2t = self.alloc(self.translate(new_ctx, e2));
+                let piece = |i: u32| {
+                    self.alloc(Expr::Op(Op::Proj(i), self.alloc_slice([
+                        self.alloc(Expr::Var(DebruijnIndex(i)))
+                    ])))
+                };
+                Expr::LetIn(e1t, self.alloc(
+                    Expr::LetIn(piece(0), self.alloc(
+                        Expr::LetIn(piece(1), e2t)))))
             },
             HExpr::ClockLam(_, x, e) => {
                 let new_ctx = Rc::new(Ctx::ClockVar(x, ctx));

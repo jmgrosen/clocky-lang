@@ -125,7 +125,8 @@ impl<'a> Translator<'a> {
             // this will do for now, i think
             Con::Stream |
             Con::Array | // right now we have no array size polymorphism so all array sizes are static
-            Con::Pair =>
+            Con::Pair |
+            Con::ClockEx =>
                 arena.alloc_slice_r(args.iter().map(|e| self.translate(e))),
             Con::InL => {
                 assert!(args.len() == 1);
