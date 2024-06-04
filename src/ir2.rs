@@ -93,7 +93,7 @@ impl<'a> Translator<'a> {
             HExpr::Delay(Some(ref used), e) =>
                 self.build_new_closure(false, 0, used, e),
             HExpr::Adv(e) =>
-                arena.alloc(Expr::CallIndirect(self.translate(e), &[])),
+                arena.alloc(Expr::Op(Op::Advance, arena.alloc_slice([self.translate(e)]))),
             HExpr::Lam(None, _, _) |
             HExpr::Box(None, _) |
             HExpr::Lob(None, _) |

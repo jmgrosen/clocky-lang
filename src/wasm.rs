@@ -584,6 +584,40 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.translate(ctx, clock);
                 self.insns.push(wasm::Instruction::Call(self.translator.runtime_exports["since_last_tick_stream"].1));
             },
+            (Op::Advance, &[delayed]) => {
+                self.translate(ctx, delayed);
+                // on the stack now is a pointer to either a closure
+                // or a value, offsetted. essentially a thunk. we
+                // check which one by seeing if the first word is 0.
+                let thunk = self.temp(wasm::ValType::I32, 0);
+                self.insns.push(wasm::Instruction::LocalTee(thunk));
+                self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                let func = self.temp(wasm::ValType::I32, 1);
+                self.insns.push(wasm::Instruction::LocalTee(func));
+
+                self.insns.push(wasm::Instruction::If(wasm::BlockType::Result(wasm::ValType::I32)));
+
+                self.insns.push(wasm::Instruction::LocalGet(thunk));
+                self.insns.push(wasm::Instruction::LocalGet(func));
+                let funty_idx = self.translator.function_types.for_args(1);
+                self.insns.push(wasm::Instruction::CallIndirect { ty: funty_idx, table: 0 });
+                let result = self.temp(wasm::ValType::I32, 2);
+                self.insns.push(wasm::Instruction::LocalSet(result));
+                self.insns.push(wasm::Instruction::LocalGet(thunk));
+                self.insns.push(wasm::Instruction::I32Const(0));
+                self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+                self.insns.push(wasm::Instruction::LocalGet(thunk));
+                self.insns.push(wasm::Instruction::LocalGet(result));
+                self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 4, align: 2, memory_index: 0 }));
+                self.insns.push(wasm::Instruction::LocalGet(result));
+
+                self.insns.push(wasm::Instruction::Else);
+
+                self.insns.push(wasm::Instruction::LocalGet(thunk));
+                self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 4, align: 2, memory_index: 0 }));
+
+                self.insns.push(wasm::Instruction::End);
+            },
             _ =>
                 panic!("did not expect {} arguments for op {:?}", args.len(), op)
         }

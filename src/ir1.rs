@@ -127,6 +127,7 @@ pub enum Op {
     LoadGlobal(Global),
     ApplyCoeff(Ratio<u32>),
     SinceLastTickStream,
+    Advance,
 }
 
 impl Op {
@@ -204,6 +205,7 @@ impl Op {
             Op::LoadGlobal(_) => Some(0),
             Op::ApplyCoeff(_) => Some(1),
             Op::SinceLastTickStream => Some(1),
+            Op::Advance => Some(1),
         }
     }
 }
