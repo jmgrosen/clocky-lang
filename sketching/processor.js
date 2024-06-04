@@ -31,14 +31,11 @@ class ClockyStreamProcessor extends AudioWorkletProcessor {
       }
 
       this.stream = this.instance.exports.sample(this.stream, 128, this.samples_ptr);
-      const mem_f32 = new Float32Array(this.instance.exports.memory.buffer);
-      const samples = mem_f32.slice(this.samples_ptr/4, this.samples_ptr/4 + 128);
+      const samples = new Float32Array(this.instance.exports.memory.buffer, this.samples_ptr, 128);
 
       const output = outputs[0];
       output.forEach((channel) => {
-        for (let i = 0; i < channel.length; i++) {
-          channel.set(samples, 0);
-        }
+        channel.set(samples, 0);
       });
     }
     return true;
