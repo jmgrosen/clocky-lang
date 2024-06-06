@@ -141,11 +141,36 @@ pub fn compile(code: String) -> Result<Vec<u8>, String> {
         translator2.globals[def_idx] = ir2::GlobalDef::ClosedExpr { body: expr_ir2 };
     }
 
-    for (i, func) in translator2.globals.iter().enumerate() {
+    let mut global_defs = translator2.globals;
+    for (i, func) in global_defs.iter().enumerate() {
         println!("global {i}: {func:?}");
     }
 
-    let wasm_bytes = wasm::translate(&translator2.globals, main.unwrap());
+    // generate partial application functions
+    let partial_app_def_offset = global_defs.len() as u32;
+    let max_arity = global_defs.iter().map(|def| def.arity().unwrap_or(0)).max().unwrap();
+    // let partial_app_defs = Vec::with_capacity(max_arity * (max_arity + 1) / 2 - max_arity);
+    for arity in 2..=max_arity {
+        for n_args in 1..arity {
+            let n_remaining_args = arity - n_args;
+            let args_to_call = (n_remaining_args..arity).map(|i| {
+                expr2_arena.alloc(ir2::Expr::Var(ir1::DebruijnIndex(i+1)))
+            }).chain((0..n_remaining_args).map(|i| {
+                expr2_arena.alloc(ir2::Expr::Var(ir1::DebruijnIndex(i)))
+            }));
+            global_defs.push(ir2::GlobalDef::Func {
+                rec: false,
+                arity: n_remaining_args,
+                env_size: n_args + 1,
+                body: expr2_arena.alloc(ir2::Expr::CallIndirect(
+                    expr2_arena.alloc(ir2::Expr::Var(ir1::DebruijnIndex(n_remaining_args))),
+                    expr2_arena.alloc_slice_r(args_to_call)
+                )),
+            });
+        }
+    }
+
+    let wasm_bytes = wasm::translate(&global_defs, partial_app_def_offset, main.unwrap());
 
     Ok(wasm_bytes)
 }

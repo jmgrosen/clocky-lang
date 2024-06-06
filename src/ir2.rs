@@ -25,6 +25,17 @@ pub enum GlobalDef<'a> {
     },
 }
 
+impl<'a> GlobalDef<'a> {
+    pub fn arity(&self) -> Option<u32> {
+        match *self {
+            GlobalDef::Func { arity, .. } =>
+                Some(arity),
+            GlobalDef::ClosedExpr { .. } =>
+                None,
+        }
+    }
+}
+
 pub struct Translator<'a> {
     pub arena: &'a ArenaPlus<'a, Expr<'a>>,
     pub globals: Vec<GlobalDef<'a>>,

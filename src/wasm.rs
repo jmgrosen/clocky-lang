@@ -12,7 +12,7 @@ use crate::runtime::Runtime;
 
 const RUNTIME_BYTES: &'static [u8] = include_bytes!(env!("CARGO_CDYLIB_FILE_CLOCKY_RUNTIME"));
 
-pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
+pub fn translate<'a>(global_defs: &[GlobalDef<'a>], partial_app_def_offset: u32, main: usize) -> Vec<u8> {
     // TODO: can we parse more of this at compile time?
     // probably... would have to be a build script though, I imagine
     let runtime = Runtime::from_bytes(RUNTIME_BYTES);
@@ -44,11 +44,13 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], main: usize) -> Vec<u8> {
     runtime.emit_code(&mut codes);
     runtime.emit_data(&mut data);
 
+
     let func_offset = runtime.functions.len() as u32;
     let mut translator = Translator {
         globals: global_defs,
         globals_offset,
         func_table_offset: func_offset, // TODO: is this right?
+        partial_app_table_offset: partial_app_def_offset + func_offset,
         function_types: &mut function_types,
         bad_global,
         runtime_exports: &runtime.exports,
@@ -183,6 +185,7 @@ struct Translator<'a> {
     globals: &'a [GlobalDef<'a>],
     globals_offset: u32,
     func_table_offset: u32,
+    partial_app_table_offset: u32,
     function_types: &'a mut FunctionTypes,
     bad_global: u32,
     runtime_exports: &'a HashMap<String, (wasmparser::ExternalKind, u32)>,
@@ -294,30 +297,74 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     self.translate(ctx.clone(), arg);
                 }
                 self.translate(ctx, target);
-                let t0 = self.temp(wasm::ValType::I32, 0);
-                self.insns.push(wasm::Instruction::LocalTee(t0));
+                let call_target_closure = self.temp(wasm::ValType::I32, 0);
+                self.insns.push(wasm::Instruction::LocalTee(call_target_closure));
                 self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 4, align: 2, memory_index: 0 }));
-                let t1 = self.temp(wasm::ValType::I32, 1);
-                self.insns.push(wasm::Instruction::LocalSet(t1));
+                let arity = self.temp(wasm::ValType::I32, 1);
+                self.insns.push(wasm::Instruction::LocalTee(arity));
 
-                self.insns.push(wasm::Instruction::LocalGet(t1));
+                // TODO: should this logic be outsourced to a single
+                // function per number of args? probably
                 self.insns.push(wasm::Instruction::I32Const(args.len() as i32));
                 self.insns.push(wasm::Instruction::I32Eq);
                 let if_idx = self.translator.function_types.for_args(args.len() as u32);
                 self.insns.push(wasm::Instruction::If(wasm::BlockType::FunctionType(if_idx)));
-                self.insns.push(wasm::Instruction::LocalGet(t0));
-                self.insns.push(wasm::Instruction::LocalGet(t0));
+
+                self.insns.push(wasm::Instruction::LocalGet(call_target_closure));
+                self.insns.push(wasm::Instruction::LocalGet(call_target_closure));
                 self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
                 let funty_idx = self.translator.function_types.for_args(args.len() as u32 + 1);
                 self.insns.push(wasm::Instruction::CallIndirect { ty: funty_idx, table: 0 });
+
                 self.insns.push(wasm::Instruction::Else);
-                // TODO: create closure!
+
+                // we'll have to create a partial application closure.
+                let closure_size = (args.len() as i32 + 3) * 4;
+                self.insns.push(wasm::Instruction::I32Const(closure_size));
+                self.alloc();
+                let partial_app_closure = self.temp(wasm::ValType::I32, 2);
+                self.insns.push(wasm::Instruction::LocalTee(partial_app_closure));
+
+                // TODO: move this calculation logic somewhere else to couple this less badly.
+                //
+                // if n is the arity of the closure we're trying to
+                // call and m is the number of arguments we want to
+                // apply (where m < n), the index of the function
+                // should be (((n-1) * (n-2))/2 + (m - 1))
+                self.insns.push(wasm::Instruction::LocalGet(arity));
                 self.insns.push(wasm::Instruction::I32Const(1));
-                self.insns.push(wasm::Instruction::GlobalSet(self.translator.bad_global));
-                for _ in 0..args.len() {
-                    self.insns.push(wasm::Instruction::Drop);
+                self.insns.push(wasm::Instruction::I32Sub);
+                self.insns.push(wasm::Instruction::LocalGet(arity));
+                self.insns.push(wasm::Instruction::I32Const(2));
+                self.insns.push(wasm::Instruction::I32Sub);
+                self.insns.push(wasm::Instruction::I32Mul);
+                self.insns.push(wasm::Instruction::I32Const(1));
+                self.insns.push(wasm::Instruction::I32ShrU);
+                let offset = self.translator.partial_app_table_offset as i32 + args.len() as i32 - 1;
+                self.insns.push(wasm::Instruction::I32Const(offset));
+                self.insns.push(wasm::Instruction::I32Add);
+                self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 0, align: 2, memory_index: 0 }));
+
+                self.insns.push(wasm::Instruction::LocalGet(partial_app_closure));
+                self.insns.push(wasm::Instruction::LocalGet(arity));
+                self.insns.push(wasm::Instruction::I32Const(args.len() as i32));
+                self.insns.push(wasm::Instruction::I32Sub);
+                self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 4, align: 2, memory_index: 0 }));
+
+                self.insns.push(wasm::Instruction::LocalGet(partial_app_closure));
+                self.insns.push(wasm::Instruction::LocalGet(call_target_closure));
+                self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 8, align: 2, memory_index: 0 }));
+
+                let arg_temp = self.temp(wasm::ValType::I32, 3);
+                for i in 0..args.len() {
+                    self.insns.push(wasm::Instruction::LocalSet(arg_temp));
+                    self.insns.push(wasm::Instruction::LocalGet(partial_app_closure));
+                    self.insns.push(wasm::Instruction::LocalGet(arg_temp));
+                    self.insns.push(wasm::Instruction::I32Store(wasm::MemArg { offset: 12 + (i as u64) * 4, align: 2, memory_index: 0 }));
                 }
-                self.insns.push(wasm::Instruction::I32Const(0));
+
+                self.insns.push(wasm::Instruction::LocalGet(partial_app_closure));
+
                 self.insns.push(wasm::Instruction::End);
             },
         }
