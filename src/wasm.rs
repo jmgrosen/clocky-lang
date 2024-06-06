@@ -385,6 +385,9 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             (Op::Const(Value::Unit), &[]) => {
                 self.insns.push(wasm::Instruction::I32Const(0));
             },
+            (Op::UnboxedConst(Value::Index(i)), &[]) => {
+                self.insns.push(wasm::Instruction::I32Const(i as i32));
+            },
             (Op::Const(Value::Index(i)), &[]) => {
                 // eVeRyThInG is boxed
                 self.insns.push(wasm::Instruction::I32Const(4));
@@ -664,6 +667,16 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.insns.push(wasm::Instruction::I32Load(wasm::MemArg { offset: 4, align: 2, memory_index: 0 }));
 
                 self.insns.push(wasm::Instruction::End);
+            },
+            (Op::Wait, &[clk]) => {
+                self.translate(ctx, clk);
+                self.insns.push(wasm::Instruction::Call(self.translator.runtime_exports["wait_closure"].1));
+            },
+            (Op::Schedule, &[source_clock, target_clock, clos]) => {
+                self.translate(ctx.clone(), source_clock);
+                self.translate(ctx.clone(), target_clock);
+                self.translate(ctx, clos);
+                self.insns.push(wasm::Instruction::Call(self.translator.runtime_exports["schedule"].1));
             },
             _ =>
                 panic!("did not expect {} arguments for op {:?}", args.len(), op)

@@ -14,10 +14,11 @@ class ClockyStreamProcessor extends AudioWorkletProcessor {
         console.log("instantiated");
         this.instance = instance;
         this.first = true;
-        const clock = instance.exports.alloc(4);
-        const mem_f32 = new Float32Array(this.instance.exports.memory.buffer);
-        mem_f32[clock / 4] = 1.0 / 48000.0;
-        this.stream = instance.exports.apply_clock(instance.exports.main, clock);
+        instance.exports.init_scheduler()
+        const clock0 = instance.exports.get_clock_data(0);
+        const intermediate = instance.exports.apply_clock(instance.exports.main, clock0);
+        const clock1 = instance.exports.get_clock_data(1);
+        this.stream = instance.exports.apply_clock(intermediate, clock1);
         this.samples_ptr = instance.exports.alloc(4 * 128);
       });
     };
@@ -30,7 +31,7 @@ class ClockyStreamProcessor extends AudioWorkletProcessor {
         this.first = false;
       }
 
-      this.stream = this.instance.exports.sample(this.stream, 128, this.samples_ptr);
+      this.stream = this.instance.exports.sample_scheduler(this.stream, 128, this.samples_ptr);
       const samples = new Float32Array(this.instance.exports.memory.buffer, this.samples_ptr, 128);
 
       const output = outputs[0];

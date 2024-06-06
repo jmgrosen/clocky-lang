@@ -343,6 +343,7 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
     
     let mut main = None;
     let defs_ir1: HashMap<Symbol, &ir1::Expr<'_>> = defs.iter().map(|&(name, expr)| {
+        println!("compiling {}", toplevel.interner.resolve(name).unwrap());
         let expr_ir1 = expr_under_arena.alloc(translator.translate(ir1::Ctx::Empty.into(), expr));
         let (annotated, _) = translator.annotate_used_vars(expr_ir1);
         let shifted = translator.shift(annotated, 0, 0, &imbl::HashMap::new());
@@ -537,6 +538,28 @@ fn main() -> Result<(), ExitCode> {
     let since_tick = interner.get_or_intern_static("since_tick");
     let c = interner.get_or_intern_static("c");
     globals.insert(since_tick, typing::Type::Forall(c, Kind::Clock, Box::new(typing::Type::Stream(typing::Clock::from_var(c), Box::new(typing::Type::Sample)))));
+    let wait = interner.get_or_intern_static("wait");
+    globals.insert(wait, typing::Type::Forall(c, Kind::Clock, Box::new(typing::Type::Later(Clock::from_var(c), Box::new(typing::Type::Unit)))));
+    let sched = interner.get_or_intern_static("sched");
+    let a = interner.get_or_intern_static("a");
+    let d = interner.get_or_intern_static("d");
+    globals.insert(sched, typing::Type::Forall(a, Kind::Type, Box::new(
+        typing::Type::Forall(c, Kind::Clock, Box::new(
+            typing::Type::Forall(d, Kind::Clock, Box::new(
+                typing::Type::Function(Box::new(
+                    typing::Type::Later(Clock::from_var(c), Box::new(Type::TypeVar(a)))
+                ), Box::new(
+                    typing::Type::Later(Clock::from_var(d), Box::new(
+                        Type::Sum(Box::new(
+                            Type::Unit
+                        ), Box::new(
+                            Type::TypeVar(a)
+                        ))
+                    ))
+                ))
+            ))
+        ))
+    )));
 
     let mut toplevel = TopLevel { arena: &annot_arena, interner, globals };
 

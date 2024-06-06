@@ -11,3 +11,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 libm = "0.2.8"
+bit-set = "0.5.3"

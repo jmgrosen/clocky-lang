@@ -79,6 +79,28 @@ pub fn compile(code: String) -> Result<Vec<u8>, String> {
     let since_tick = interner.get_or_intern_static("since_tick");
     let c = interner.get_or_intern_static("c");
     globals.insert(since_tick, typing::Type::Forall(c, Kind::Clock, Box::new(typing::Type::Stream(typing::Clock::from_var(c), Box::new(typing::Type::Sample)))));
+    let wait = interner.get_or_intern_static("wait");
+    globals.insert(wait, typing::Type::Forall(c, Kind::Clock, Box::new(typing::Type::Later(Clock::from_var(c), Box::new(typing::Type::Unit)))));
+    let sched = interner.get_or_intern_static("sched");
+    let a = interner.get_or_intern_static("a");
+    let d = interner.get_or_intern_static("d");
+    globals.insert(sched, typing::Type::Forall(a, Kind::Type, Box::new(
+        typing::Type::Forall(c, Kind::Clock, Box::new(
+            typing::Type::Forall(d, Kind::Clock, Box::new(
+                typing::Type::Function(Box::new(
+                    typing::Type::Later(Clock::from_var(c), Box::new(Type::TypeVar(a)))
+                ), Box::new(
+                    typing::Type::Later(Clock::from_var(d), Box::new(
+                        Type::Sum(Box::new(
+                            Type::Unit
+                        ), Box::new(
+                            Type::TypeVar(a)
+                        ))
+                    ))
+                ))
+            ))
+        ))
+    )));
 
     let mut toplevel = TopLevel { arena: &annot_arena, interner, globals };
 
@@ -156,7 +178,8 @@ pub fn compile(code: String) -> Result<Vec<u8>, String> {
             let args_to_call = (n_remaining_args..arity).map(|i| {
                 expr2_arena.alloc(ir2::Expr::Var(ir1::DebruijnIndex(i+1)))
             }).chain((0..n_remaining_args).map(|i| {
-                expr2_arena.alloc(ir2::Expr::Var(ir1::DebruijnIndex(i)))
+                // expr2_arena.alloc(ir2::Expr::Op(ir1::Op::UnboxedConst(ir1::Value::Index(42+i as usize)), &[]))
+                expr2_arena.alloc(ir2::Expr::Var(ir1::DebruijnIndex(n_remaining_args - 1 - i)))
             }));
             global_defs.push(ir2::GlobalDef::Func {
                 rec: false,

@@ -81,7 +81,14 @@ builtins!(
     since_tick[1]
       { &[_] => panic!("oops no interpreter") }
       [ &ir2::Expr::Op(Op::SinceLastTickStream, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+    wait[1]
+      { &[_] => panic!("oops no interpreter") }
+      [ &ir2::Expr::Op(Op::Wait, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+    sched[3]
+      { &[_] => panic!("oops no interpreter") }
+      [ &ir2::Expr::Op(Op::Schedule, &[&ir2::Expr::Var(DebruijnIndex(2)), &ir2::Expr::Var(DebruijnIndex(1)), &ir2::Expr::Var(DebruijnIndex(0))]) ],
 );
+
 
 pub type BuiltinsMap = HashMap<Symbol, Builtin>;
 

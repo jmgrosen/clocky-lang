@@ -45,10 +45,10 @@ setup({
     example440,
   ],
   extractTitleFromDoc: (doc) => {
-    if (!doc.startsWith("def ")) {
+    if (!doc.startsWith("-- ")) {
       return "[unnamed]";
     } else {
-      return doc.slice(4).split(" ")[0]; // TODO: regex
+      return doc.slice(3).split("\n")[0]; // TODO: regex
     }
   },
 });

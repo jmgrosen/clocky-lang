@@ -88,6 +88,7 @@ impl Con {
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Op {
     Const(Value),
+    UnboxedConst(Value),
     FAdd,
     FSub,
     FMul,
@@ -128,6 +129,8 @@ pub enum Op {
     ApplyCoeff(Ratio<u32>),
     SinceLastTickStream,
     Advance,
+    Wait,
+    Schedule,
 }
 
 impl Op {
@@ -167,6 +170,7 @@ impl Op {
     fn arity(&self) -> Option<u8> {
         match *self {
             Op::Const(_) => Some(0),
+            Op::UnboxedConst(_) => Some(0),
             Op::FAdd => Some(2),
             Op::FSub => Some(2),
             Op::FMul => Some(2),
@@ -206,6 +210,8 @@ impl Op {
             Op::ApplyCoeff(_) => Some(1),
             Op::SinceLastTickStream => Some(1),
             Op::Advance => Some(1),
+            Op::Wait => Some(1),
+            Op::Schedule => Some(3),
         }
     }
 }
