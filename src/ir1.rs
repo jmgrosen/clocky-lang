@@ -131,6 +131,8 @@ pub enum Op {
     Advance,
     Wait,
     Schedule,
+    MakeClock(f32),
+    GetClock(u32),
 }
 
 impl Op {
@@ -212,6 +214,8 @@ impl Op {
             Op::Advance => Some(1),
             Op::Wait => Some(1),
             Op::Schedule => Some(3),
+            Op::MakeClock(_) => Some(0),
+            Op::GetClock(_) => Some(0),
         }
     }
 }

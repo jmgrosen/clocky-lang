@@ -13,6 +13,10 @@
           {
             "type": "SYMBOL",
             "name": "top_level_let"
+          },
+          {
+            "type": "SYMBOL",
+            "name": "top_level_clock"
           }
         ]
       }
@@ -144,6 +148,51 @@
           "value": ";;"
         }
       ]
+    },
+    "top_level_clock": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "clock"
+        },
+        {
+          "type": "FIELD",
+          "name": "ident",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "of"
+        },
+        {
+          "type": "STRING",
+          "value": "frequency"
+        },
+        {
+          "type": "FIELD",
+          "name": "frequency",
+          "content": {
+            "type": "SYMBOL",
+            "name": "frequency"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "Hz"
+        },
+        {
+          "type": "STRING",
+          "value": ";;"
+        }
+      ]
+    },
+    "frequency": {
+      "type": "PATTERN",
+      "value": "\\d+(\\.\\d*)?"
     },
     "expression": {
       "type": "CHOICE",

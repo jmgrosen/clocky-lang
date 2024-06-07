@@ -7,7 +7,7 @@ module.exports = grammar({
     ],
 
     rules: {
-        source_file: $ => repeat1(choice($.top_level_def, $.top_level_let)),
+        source_file: $ => repeat1(choice($.top_level_def, $.top_level_let, $.top_level_clock)),
 
         comment: $ => token(choice(
           seq('--', /(\\(.|\r?\n)|[^\\\n])*/),
@@ -27,6 +27,7 @@ module.exports = grammar({
             field('body', $.expression),
             ';;'
         ),
+
         top_level_let: $ => seq(
             'let',
             field('ident', $.identifier),
@@ -36,6 +37,18 @@ module.exports = grammar({
             field('body', $.expression),
             ';;'
         ),
+
+        top_level_clock: $ => seq(
+            'clock',
+            field('ident', $.identifier),
+            'of',
+            'frequency',
+            field('frequency', $.frequency),
+            'Hz',
+            ';;'
+        ),
+
+        frequency: $ => /\d+(\.\d*)?/,
 
         expression: $ => choice(
             $.wrap_expression,

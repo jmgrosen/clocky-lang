@@ -24,12 +24,6 @@ pub struct Stream {
     tail: *const Closure,
 }
 
-#[repr(C)]
-pub struct ClockData {
-    clock: *const Clock,
-    which_clocks: *const ClockSet,
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn hd_stream(s: *const Stream) -> f32 {
     *(*s).head
@@ -63,21 +57,26 @@ pub unsafe extern "C" fn apply_clock(clos: *const Closure, clk: *const ()) -> *c
 #[repr(C)]
 struct SinceLastTickClosure {
     clos: Closure,
-    clock: *const ClockData,
+    clock: *const ClockSet,
+}
+
+unsafe fn since_last_clock_set_tick(clock_set: &ClockSet) -> f32 {
+    // TODO: should find more efficient method
+    clock_set.iter().map(|clk_id| SCHEDULER.clocks[clk_id].since_last_tick()).reduce(f32::min).unwrap()
 }
 
 unsafe extern "C" fn since_last_tick_closure(self_: *const SinceLastTickClosure) -> *const Stream {
     let st: *mut Stream = mem::transmute(alloc(mem::size_of::<Stream>() as u32));
     let val: *mut f32 = mem::transmute(alloc(mem::size_of::<f32>() as u32));
-    // i love indirection!!!!!!
-    *val = (*(*(*self_).clock).clock).since_last_tick();
+    let clock_set: &ClockSet = &*(*self_).clock;
+    *val = since_last_clock_set_tick(clock_set);
     (*st).head = val;
     (*st).tail = mem::transmute(self_);
     st
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn since_last_tick_stream(clock: *const ClockData) -> *const Stream {
+pub unsafe extern "C" fn since_last_tick_stream(clock: *const ClockSet) -> *const Stream {
     let clos: *mut SinceLastTickClosure = mem::transmute(alloc(mem::size_of::<SinceLastTickClosure>() as u32));
     (*clos).clos.func = mem::transmute(since_last_tick_closure as unsafe extern "C" fn(*const SinceLastTickClosure) -> *const Stream);
     (*clos).clos.arity = 0;
@@ -114,7 +113,7 @@ pub static UNIT_CLOSURE: Closure = Closure {
 };
 
 #[no_mangle]
-pub unsafe extern "C" fn wait_closure(_clk: *const ClockData) -> *const Closure {
+pub unsafe extern "C" fn wait_closure(_clk: *const ClockSet) -> *const Closure {
     // TODO: why doesn't &UNIT_CLOSURE work?
     Box::into_raw(Box::new(Closure {
         func: unit_closure as ClockyFunc,
@@ -151,7 +150,7 @@ struct DelayedValue {
 // target_clock, but if they are triggered by the same clock, the
 // closure really should run first...
 #[no_mangle]
-pub unsafe extern "C" fn schedule(source_clock: *const ClockData, _target_clock: *const ClockData, clos: *const Closure) -> *const Closure {
+pub unsafe extern "C" fn schedule(source_clock: *const ClockSet, _target_clock: *const ClockSet, clos: *const Closure) -> *const Closure {
     let sched_clos = alloc(mem::size_of::<ScheduledClosure>() as u32) as *mut ScheduledClosure;
     (*sched_clos).func = scheduled_closure_func;
     (*sched_clos).n_args = 0;
@@ -161,7 +160,7 @@ pub unsafe extern "C" fn schedule(source_clock: *const ClockData, _target_clock:
     (*sched_clos).cell_to_fill = target_cell;
 
     SCHEDULER.scheduled_tasks.push(Task {
-        triggering_clocks: (*(*source_clock).which_clocks).clone(),
+        triggering_clocks: (*source_clock).clone(),
         clos: sched_clos as *const Closure,
     });
 
@@ -176,14 +175,8 @@ pub unsafe extern "C" fn schedule(source_clock: *const ClockData, _target_clock:
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn get_clock_data(clk_id: ClockId) -> *const ClockData {
-    // TODO: aaaaaaaaaaa this is obviously bad if we make new clocks
-    let clock = &SCHEDULER.clocks[clk_id] as *const Clock;
-    let which_clocks = Box::into_raw(Box::new(iter::once(clk_id).collect::<ClockSet>()));
-    Box::into_raw(Box::new(ClockData {
-        clock,
-        which_clocks,
-    }))
+pub unsafe extern "C" fn get_clock_set(clk_id: ClockId) -> *const ClockSet {
+    Box::into_raw(Box::new(iter::once(clk_id).collect()))
 }
 
 enum Clock {
@@ -249,9 +242,15 @@ static mut SCHEDULER: Scheduler = Scheduler {
 
 #[no_mangle]
 pub unsafe extern "C" fn init_scheduler() {
-    // two default clocks for now
     SCHEDULER.clocks.push(Clock::Audio);
-    SCHEDULER.clocks.push(Clock::Periodic { period: 0.5, remaining: 0.5 });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn make_clock(freq: f32) -> *const ClockSet {
+    let clock_id = SCHEDULER.clocks.len();
+    let period = 1. / freq;
+    SCHEDULER.clocks.push(Clock::Periodic { period, remaining: period });
+    get_clock_set(clock_id)
 }
 
 unsafe fn step_scheduler(dur: f32) {

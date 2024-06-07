@@ -1,5 +1,5 @@
 use core::fmt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::cmp::Ordering;
 use std::rc::Rc;
 use std::fmt::Write;
@@ -9,7 +9,7 @@ use string_interner::DefaultStringInterner;
 use indenter::{Format, indented, Indented};
 use typed_arena::Arena;
 
-use crate::expr::{Binop, Expr, SourceFile, Symbol, TopLevelDef, TopLevelDefKind, Value};
+use crate::expr::{Binop, Expr, SourceFile, Symbol, TopLevelDef, TopLevelDefBody, TopLevelDefKind, Value};
 use crate::util::parenthesize;
 
 // eventually this will get more complicated...
@@ -771,6 +771,7 @@ impl<'a> fmt::Display for PrettyTypeError<'a, tree_sitter::Range> {
 
 pub struct Typechecker<'a, 'b, R> {
     pub globals: &'a mut Globals,
+    pub global_clocks: &'a HashSet<Symbol>,
     pub interner: &'a mut DefaultStringInterner,
     pub arena: &'b Arena<Expr<'b, R>>,
 }
@@ -1229,35 +1230,58 @@ impl<'a, 'b, R: Clone> Typechecker<'a, 'b, R> {
         let mut defs = Vec::new();
         let mut errs = Vec::new();
         let mut running_ctx = Ctx::Empty;
+        for &clock_name in self.global_clocks.iter() {
+            running_ctx = Ctx::TypeVar(clock_name, Kind::Clock, running_ctx.into());
+        }
         for def in file.defs.iter() {
-            let ctx = match def.kind {
-                TopLevelDefKind::Let => &running_ctx,
-                TopLevelDefKind::Def => &Ctx::Empty,
+            match def.body {
+                TopLevelDefBody::Def { kind, ref type_, expr } => {
+                    let ctx = match kind {
+                        TopLevelDefKind::Let => &running_ctx,
+                        TopLevelDefKind::Def => &Ctx::Empty,
+                    };
+                    if let Err(missing_symbol) = type_.check_validity(ctx) {
+                        errs.push(TopLevelTypeError::InvalidType(def.name, type_.clone(), missing_symbol));
+                        continue;
+                    }
+                    match self.check(ctx, expr, type_) {
+                        Ok(body_elab) => {
+                            defs.push(TopLevelDef {
+                                body: TopLevelDefBody::Def { expr: body_elab, type_: type_.clone(), kind },
+                                ..def.clone()
+                            });
+                        }
+                        Err(err) => {
+                            errs.push(TopLevelTypeError::TypeError(def.name, err));
+                        }
+                    }
+                    if running_ctx.lookup_term_var(def.name).is_some() ||
+                        self.globals.get(&def.name).is_some() {
+                        errs.push(TopLevelTypeError::CannotRedefine(def.name, def.range.clone()));
+                    } else {
+                        match kind {
+                            TopLevelDefKind::Let => {
+                                running_ctx = Ctx::TermVar(def.name, type_.clone(), Rc::new(running_ctx));
+                            },
+                            TopLevelDefKind::Def => {
+                                self.globals.insert(def.name, type_.clone());
+                            },
+                        }
+                    }
+                },
+                TopLevelDefBody::Clock { freq } => {
+                    if running_ctx.lookup_type_var(def.name).is_some() {
+                        errs.push(TopLevelTypeError::CannotRedefine(def.name, def.range.clone()));
+                    } else {
+                        running_ctx = Ctx::TypeVar(def.name, Kind::Clock, running_ctx.into());
+                        // this reconstruction is necessary for lifetime reasons
+                        defs.push(TopLevelDef {
+                            body: TopLevelDefBody::Clock { freq },
+                            ..def.clone()
+                        });
+                    }
+                },
             };
-            // TODO: add clock globals to this somehow
-            if let Err(missing_symbol) = def.type_.check_validity(ctx) {
-                errs.push(TopLevelTypeError::InvalidType(def.name, def.type_.clone(), missing_symbol));
-            }
-            match self.check(ctx, &def.body, &def.type_) {
-                Ok(body_elab) => {
-                    defs.push(TopLevelDef { body: body_elab, ..def.clone() });
-                }
-                Err(err) => {
-                    errs.push(TopLevelTypeError::TypeError(def.name, err));
-                }
-            }
-            if running_ctx.lookup_term_var(def.name).is_some() ||
-                self.globals.get(&def.name).is_some() {
-                errs.push(TopLevelTypeError::CannotRedefine(def.name, def.range.clone()));
-            }
-            match def.kind {
-                TopLevelDefKind::Let => {
-                    running_ctx = Ctx::TermVar(def.name, def.type_.clone(), Rc::new(running_ctx));
-                },
-                TopLevelDefKind::Def => {
-                    self.globals.insert(def.name, def.type_.clone());
-                },
-            }
         }
 
         if errs.is_empty() {

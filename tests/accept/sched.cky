@@ -1,0 +1,130 @@
+-- snares?
+
+def map : for a : type. for b : type. for k : clock.
+  [](a -> b) -> ~^(k) a -> ~^(k) b =
+  \f. &^(k) r. \s.
+    let (x, sp) = %s in
+    unbox f x :: `(!(unbox r) !sp);;
+
+-- woves
+
+def randi : for k : clock. index -> ~^(k) index =
+  &^(k) r. \seed.
+    let newseed = seed .*. 196314165 .+. 907633515 in
+    newseed :: `(!(unbox r) newseed);;
+
+def convert : index -> sample = \x.
+  reinterpi (0x3F800000 .|. (x .>>. 9)) - 1.0;;
+
+def rands : for k : clock. index -> ~^(k) sample =
+  \seed.
+    (map $(index) $(sample) @(k) (box convert) (randi @(k) seed));;
+
+def phasor : for k : clock. sample -> ~^(k) sample =
+  \delta. ((&^(k) phasor. \phase.
+    let prenewphase = phase + delta in
+    let newphase = case prenewphase <= 1.0 {
+                     inl x => prenewphase
+                   | inr x => prenewphase - 1.0
+                   } in
+    phase :: `(!(unbox phasor) newphase)) : sample -> ~^(k) sample) 0.0;;
+
+def countup : for k : clock. sample -> ~^(k) sample =
+  \delta. ((&^(k) phasor. \phase.
+    let newphase = phase + delta in
+    phase :: `(!(unbox phasor) newphase)) : sample -> ~^(k) sample) 0.0;;
+
+def zipwith : for a : type. for b : type. for c : type. for k : clock.
+  [](a -> b -> c) -> ~^(k) a -> ~^(k) b -> ~^(k) c =
+  \f. &^(k) sum. \s1. \s2.
+    let (x1, s1p) = %s1 in
+    let (x2, s2p) = %s2 in
+    unbox f x1 x2 :: `(!(unbox sum) !s1p !s2p);;
+
+def sum : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
+  zipwith $(sample) $(sample) $(sample) @(k) (box (\x1. \x2. x1 + x2));;
+
+def product : for k : clock. ~^(k) sample -> ~^(k) sample -> ~^(k) sample =
+  zipwith $(sample) $(sample) $(sample) @(k) (box (\x1. \x2. x1 * x2));;
+
+def clamp_at_zero : sample -> sample = \x.
+  case x > 0.0 {
+    inl y => x
+  | inr y => 0.0
+  };;
+
+def abs : sample -> sample = \x.
+  case x > 0.0 {
+    inl y => x
+  | inr y => 0.0 - x
+  };;
+
+def amp : sample -> sample = \x.
+  let y = sin (2. * 3.14159 * x) in
+  abs (y * y * y) * 0.8 + 0.2;;
+
+def maps : for k : clock. [](sample -> sample) -> ~^(k) sample -> ~^(k) sample =
+  map $(sample) $(sample) @(k);;
+
+def noise : for k : clock. index -> ~^(k) sample =
+  \seed. maps @(k) (box (\x. 2.0 * (x - 0.5))) (rands @(k) seed);;
+
+def onepole : for k : clock. sample -> ~^(k) sample -> |>^(k) ~^(k) sample =
+  \factor. \s.
+    let (initial, sp) = %s in
+    `(((&^(k) op. \acc. \spp.
+          let (x, sppp) = %spp in
+          let out = x * factor + acc * (1. - factor) in
+          out :: `(!(unbox op) out !sppp)) : sample -> ~^(k) sample -> ~^(k) sample) initial !sp);;
+
+def wavesunfiltered : for k : clock. ~^(k) sample =
+  product @(k)
+    (maps @(k) (box amp) (phasor @(k) (0.1 / 48000.)))
+    (maps @(k) (box (\x. x - 0.5)) (rands @(k) 1337));;
+
+def shared : for k : clock. ~^(k) sample =
+  let wv = wavesunfiltered @(k) in
+  sum @(k)
+    (maps @(k) (box (\x. add (0.5 * x) 0.0)) wv)
+    (maps @(k) (box (\x. add (0.5 * x) 0.0)) wv);;
+
+def regen_on_tick : for k1 : clock. for k2 : clock. [](~^(k1) sample) -> ~^(k1) sample =
+  \gen.
+    let go: ~^(k1) sample -> unit + unit -> ~^(k1) sample =
+      (&^(k1) regen. \s. \switch.
+         let next_tick = sched $(unit) @(k2) @(k1) (wait @(k2)) in
+         let (x, sp) = %(case switch {
+                           inl z => s
+                         | inr z => unbox gen
+                         }) in
+        x :: `(!(unbox regen) !sp !next_tick)) in
+    go (unbox gen) (inl ());;
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def envelope : for k : clock. ~^(k) sample =
+  maps @(k) (box (\x. clamp_at_zero (1.0 - x))) (countup @(k) (2.0 / 48000.));;
+
+def snare : for k : clock. ~^(k) sample =
+  product @(k)
+    (envelope @(k))
+    (noise @(k) 1337);;
+
+clock beat of frequency 2 Hz;;
+
+let main : ~^(audio) sample =
+  maps @(audio) (box (\x. 1.0 * x))
+    (regen_on_tick @(audio) @(beat) (box (snare @(audio)));;

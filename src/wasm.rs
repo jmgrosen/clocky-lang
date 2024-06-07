@@ -25,6 +25,7 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], partial_app_def_offset: u32,
     let mut function_types = FunctionTypes { types: runtime.types.clone() };
     let mut globals_out = wasm::GlobalSection::new();
     let mut init_func = wasm::Function::new_with_locals_types([wasm::ValType::I32]);
+    init_func.instruction(&wasm::Instruction::Call(runtime.exports["init_scheduler"].1));
 
     runtime.emit_functions(&mut functions);
     runtime.emit_globals(&mut globals_out);
@@ -677,6 +678,14 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.translate(ctx.clone(), target_clock);
                 self.translate(ctx, clos);
                 self.insns.push(wasm::Instruction::Call(self.translator.runtime_exports["schedule"].1));
+            },
+            (Op::MakeClock(freq), &[]) => {
+                self.insns.push(wasm::Instruction::F32Const(freq));
+                self.insns.push(wasm::Instruction::Call(self.translator.runtime_exports["make_clock"].1));
+            },
+            (Op::GetClock(i), &[]) => {
+                self.insns.push(wasm::Instruction::I32Const(i as i32));
+                self.insns.push(wasm::Instruction::Call(self.translator.runtime_exports["get_clock_set"].1));
             },
             _ =>
                 panic!("did not expect {} arguments for op {:?}", args.len(), op)

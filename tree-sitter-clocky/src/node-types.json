@@ -970,6 +970,10 @@
       "required": true,
       "types": [
         {
+          "type": "top_level_clock",
+          "named": true
+        },
+        {
           "type": "top_level_def",
           "named": true
         },
@@ -1026,6 +1030,32 @@
         "types": [
           {
             "type": "type",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "top_level_clock",
+    "named": true,
+    "fields": {
+      "frequency": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "frequency",
+            "named": true
+          }
+        ]
+      },
+      "ident": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
             "named": true
           }
         ]
@@ -1487,6 +1517,10 @@
     "named": false
   },
   {
+    "type": "Hz",
+    "named": false
+  },
+  {
     "type": "[",
     "named": false
   },
@@ -1539,6 +1573,14 @@
     "named": false
   },
   {
+    "type": "frequency",
+    "named": false
+  },
+  {
+    "type": "frequency",
+    "named": true
+  },
+  {
     "type": "identifier",
     "named": true
   },
@@ -1563,12 +1605,16 @@
     "named": false
   },
   {
-    "type": "sample",
-    "named": true
+    "type": "of",
+    "named": false
   },
   {
     "type": "sample",
     "named": false
+  },
+  {
+    "type": "sample",
+    "named": true
   },
   {
     "type": "type",

@@ -272,19 +272,48 @@ impl<'a, 'b, R> fmt::Display for PrettyExpr<'a, 'b, R> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TopLevelDefKind {
     Let,
     Def,
 }
 
+impl fmt::Display for TopLevelDefKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            TopLevelDefKind::Let => write!(f, "let"),
+            TopLevelDefKind::Def => write!(f, "def"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum TopLevelDefBody<'a, R> {
+    Def { kind: TopLevelDefKind, type_: Type, expr: &'a Expr<'a, R> },
+    Clock { freq: f32 },
+}
+
+impl<'a, R> TopLevelDefBody<'a, R> {
+    pub fn get_expr(&self) -> Option<&'a Expr<'a, R>> {
+        match *self {
+            TopLevelDefBody::Def { expr, .. } => Some(expr),
+            _ => None,
+        }
+    }
+
+    pub fn get_type(&self) -> Option<&Type> {
+        match *self {
+            TopLevelDefBody::Def { ref type_, .. } => Some(type_),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TopLevelDef<'a, R> {
-    pub kind: TopLevelDefKind,
     pub name: Symbol,
-    pub type_: Type,
-    pub body: &'a Expr<'a, R>,
     pub range: R,
+    pub body: TopLevelDefBody<'a, R>,
 }
 
 pub struct PrettyTopLevelLet<'a, R> {
@@ -294,7 +323,19 @@ pub struct PrettyTopLevelLet<'a, R> {
 
 impl<'a, R> fmt::Display for PrettyTopLevelLet<'a, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "def {}: {} = {}", self.interner.resolve(self.def.name).unwrap(), self.def.type_.pretty(self.interner), self.def.body.pretty(self.interner))
+        let name = self.interner.resolve(self.def.name).unwrap();
+        match self.def.body {
+            TopLevelDefBody::Def { kind, ref type_, expr: body } =>
+                write!(f, "{} {}: {} = {};;",
+                       kind,
+                       name,
+                       type_.pretty(self.interner),
+                       body.pretty(self.interner)),
+            TopLevelDefBody::Clock { freq } =>
+                write!(f, "clock {} of frequency {} Hz;;",
+                       name,
+                       freq),
+        }
     }
 }
 

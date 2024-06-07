@@ -1,11 +1,13 @@
 use core::fmt;
+use std::iter;
+use std::collections::HashSet;
 use std::error::Error;
 use std::path::Path;
 use std::process::ExitCode;
 use std::{collections::HashMap, path::PathBuf, fs::File};
 use std::io::{Read, Write};
 
-use clocky::expr::{Expr, Symbol};
+use clocky::expr::{Expr, Symbol, TopLevelDefBody};
 use num::One;
 use string_interner::{StringInterner, DefaultStringInterner};
 
@@ -94,6 +96,7 @@ struct TopLevel<'a> {
     interner: DefaultStringInterner,
     arena: &'a Arena<Expr<'a, tree_sitter::Range>>,
     globals: Globals,
+    global_clocks: HashSet<Symbol>,
 }
 
 impl<'a> TopLevel<'a> {
@@ -103,7 +106,12 @@ impl<'a> TopLevel<'a> {
     }
 
     fn make_typechecker<'b>(&'b mut self) -> Typechecker<'b, 'a, tree_sitter::Range> {
-        Typechecker { arena: self.arena,  globals: &mut self.globals, interner: &mut self.interner }
+        Typechecker {
+            arena: self.arena,
+            globals: &mut self.globals,
+            global_clocks: &self.global_clocks,
+            interner: &mut self.interner,
+        }
     }
 }
 
@@ -189,7 +197,7 @@ fn cmd_interpret<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopL
     let elabbed_file = toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
 
     let arena = Arena::new();
-    let defs: HashMap<Symbol, &Expr<'_, ()>> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
+    let defs: HashMap<Symbol, &Expr<'_, ()>> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.get_expr().unwrap().map_ext(&arena, &(|_| ()))))).collect();
     let main = *defs.get(&parsed_file.defs.last().unwrap().name).unwrap();
     let builtins = make_builtins(&mut toplevel.interner);
     let interp_ctx = interp::InterpretationContext { builtins: &builtins, defs: &defs, env: HashMap::new() };
@@ -207,7 +215,7 @@ fn repl_one<'a>(toplevel: &mut TopLevel<'a>, interp_ctx: &interp::Interpretation
     // support parsing specific rules yet...
     let code = format!("def main: unit = {}", code);
     let expr = match toplevel.make_parser().parse_file(&code) {
-        Ok(parsed_file) => parsed_file.defs[0].body,
+        Ok(parsed_file) => parsed_file.defs[0].body.get_expr().unwrap(),
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
     let empty_symbol = toplevel.interner.get_or_intern_static("");
@@ -275,10 +283,10 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, length: us
     let elabbed_file = toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
 
     let arena = Arena::new();
-    let defs: HashMap<Symbol, &Expr<'_, ()>> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
+    let defs: HashMap<Symbol, &Expr<'_, ()>> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.get_expr().unwrap().map_ext(&arena, &(|_| ()))))).collect();
     let main_sym = toplevel.interner.get_or_intern_static("main");
     let main_def = parsed_file.defs.iter().filter(|x| x.name == main_sym).next().unwrap();
-    verify_sample_type(&main_def.type_)?;
+    verify_sample_type(&main_def.body.get_type().unwrap())?;
     let main = *defs.get(&parsed_file.defs.last().unwrap().name).unwrap();
     let builtins = make_builtins(&mut toplevel.interner);
     let mut samples = [0.0].repeat(48 * length);
@@ -303,6 +311,23 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, length: us
     Ok(())
 }
 
+
+// TODO: move this out
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+enum Name {
+    Term(Symbol),
+    Clock(Symbol),
+}
+
+impl Name {
+    fn symbol(&self) -> Symbol {
+        match *self {
+            Name::Term(x) => x,
+            Name::Clock(x) => x,
+        }
+    }
+}
+
 fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
     let parsed_file = match toplevel.make_parser().parse_file(&code) {
@@ -311,8 +336,7 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
     };
     let elabbed_file = toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
 
-    let arena = Arena::new();
-    let defs: Vec<(Symbol, &Expr<'_, ()>)> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.map_ext(&arena, &(|_| ()))))).collect();
+    let defs = elabbed_file.defs;
 
     let builtins = make_builtins(&mut toplevel.interner);
     let mut builtin_globals = HashMap::new();
@@ -327,8 +351,21 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
         });
     }
 
-    for &(name, _) in defs.iter() {
-        builtin_globals.insert(name, ir1::Global(global_defs.len() as u32));
+    let mut global_clocks = HashMap::new();
+    let audio = toplevel.interner.get_or_intern_static("audio");
+    global_clocks.insert(audio, ir1::Global(global_defs.len() as u32));
+    global_defs.push(ir2::GlobalDef::ClosedExpr {
+        body: &ir2::Expr::Var(ir1::DebruijnIndex(0)),
+    });
+    for def in defs.iter() {
+        match def.body {
+            TopLevelDefBody::Def { .. } => {
+                builtin_globals.insert(def.name, ir1::Global(global_defs.len() as u32));
+            }
+            TopLevelDefBody::Clock { .. } => {
+                global_clocks.insert(def.name, ir1::Global(global_defs.len() as u32));
+            }
+        }
         // push a dummy def that we'll replace later, to reserve the space
         global_defs.push(ir2::GlobalDef::ClosedExpr {
             body: &ir2::Expr::Var(ir1::DebruijnIndex(0)),
@@ -338,17 +375,31 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
     let expr_under_arena = Arena::new();
     let expr_ptr_arena = Arena::new();
     let expr_arena = util::ArenaPlus { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
-    let translator = ir1::Translator { globals: builtin_globals, global_clocks: HashMap::new(), arena: &expr_arena };
+    let translator = ir1::Translator { globals: builtin_globals, global_clocks, arena: &expr_arena };
 
-    
     let mut main = None;
-    let defs_ir1: HashMap<Symbol, &ir1::Expr<'_>> = defs.iter().map(|&(name, expr)| {
-        println!("compiling {}", toplevel.interner.resolve(name).unwrap());
-        let expr_ir1 = expr_under_arena.alloc(translator.translate(ir1::Ctx::Empty.into(), expr));
-        let (annotated, _) = translator.annotate_used_vars(expr_ir1);
-        let shifted = translator.shift(annotated, 0, 0, &imbl::HashMap::new());
-        (name, shifted)
-    }).collect();
+    let defs_ir1: HashMap<Name, &ir1::Expr<'_>> = iter::once({
+        let clock_expr = &*expr_under_arena.alloc(
+            ir1::Expr::Op(ir1::Op::GetClock(0), &[])
+        );
+        (Name::Clock(audio), clock_expr)
+    }).chain(defs.iter().map(|def| {
+        match def.body {
+            TopLevelDefBody::Def { expr, .. } => {
+                println!("compiling {}", toplevel.interner.resolve(def.name).unwrap());
+                let expr_ir1 = expr_under_arena.alloc(translator.translate(ir1::Ctx::Empty.into(), expr));
+                let (annotated, _) = translator.annotate_used_vars(expr_ir1);
+                let shifted = translator.shift(annotated, 0, 0, &imbl::HashMap::new());
+                (Name::Term(def.name), shifted)
+            },
+            TopLevelDefBody::Clock { freq } => {
+                let clock_expr = &*expr_under_arena.alloc(
+                    ir1::Expr::Op(ir1::Op::MakeClock(freq), &[])
+                );
+                (Name::Clock(def.name), clock_expr)
+            },
+        }
+    })).collect();
 
     let expr2_under_arena = Arena::new();
     let expr2_ptr_arena = Arena::new();
@@ -357,12 +408,15 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
 
     for (name, expr) in defs_ir1 {
         let expr_ir2 = translator2.translate(expr);
-        let def_idx = translator.globals[&name].0 as usize;
-        if name == toplevel.interner.get_or_intern_static("main") {
+        let def_idx = match name {
+            Name::Term(sym) => translator.globals[&sym].0 as usize,
+            Name::Clock(sym) => translator.global_clocks[&sym].0 as usize,
+        };
+        if name == Name::Term(toplevel.interner.get_or_intern_static("main")) {
             main = Some(def_idx);
         }
         translator2.globals[def_idx] = ir2::GlobalDef::ClosedExpr { body: expr_ir2 };
-        println!("{}: {:?}", toplevel.interner.resolve(name).unwrap(), expr_ir2);
+        println!("{}: {:?}", toplevel.interner.resolve(name.symbol()).unwrap(), expr_ir2);
     }
 
     let mut global_defs = translator2.globals;
@@ -561,7 +615,11 @@ fn main() -> Result<(), ExitCode> {
         ))
     )));
 
-    let mut toplevel = TopLevel { arena: &annot_arena, interner, globals };
+    let mut global_clock_names = HashSet::new();
+    let audio = interner.get_or_intern_static("audio");
+    global_clock_names.insert(audio);
+
+    let mut toplevel = TopLevel { arena: &annot_arena, interner, globals, global_clocks: global_clock_names };
 
     let res = match args.cmd {
         Command::Parse { file, dump_to } => cmd_parse(&mut toplevel, file, dump_to),

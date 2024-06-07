@@ -2,7 +2,7 @@ use string_interner::DefaultStringInterner;
 use typed_arena::Arena;
 use num::rational::Ratio;
 
-use crate::{expr::{Binop, Expr, SourceFile, Symbol, TopLevelDef, TopLevelDefKind, Value}, typing::{Type, ArraySize, Clock, Kind}};
+use crate::{expr::{Binop, Expr, SourceFile, Symbol, TopLevelDef, TopLevelDefBody, TopLevelDefKind, Value}, typing::{Type, ArraySize, Clock, Kind}};
 
 macro_rules! make_node_enum {
     ($enum_name:ident { $($rust_name:ident : $ts_name:ident),* } with matcher $matcher_name:ident) => {
@@ -70,6 +70,7 @@ make_node_enum!(ConcreteNode {
     SourceFile: source_file,
     TopLevelDef: top_level_def,
     TopLevelLet: top_level_let,
+    TopLevelClock: top_level_clock,
     Expression: expression,
     WrapExpression: wrap_expression,
     Identifier: identifier,
@@ -121,6 +122,7 @@ make_field_enum!(Field {
     Expr: expr,
     Func: func,
     Arg: arg,
+    Frequency: frequency,
     Binder: binder,
     Body: body,
     Clock: clock,
@@ -234,7 +236,7 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
         loop {
             let node = cur.node();
             if !node.is_extra() {
-                defs.push(self.parse_top_level_let(node)?);
+                defs.push(self.parse_top_level_decl(node)?);
             }
             if !cur.goto_next_sibling() {
                 break;
@@ -244,21 +246,42 @@ impl<'a, 'b, 'c> AbstractionContext<'a, 'b, 'c> {
         Ok(SourceFile { defs })
     }
 
-    fn parse_top_level_let<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<TopLevelDef<'b, tree_sitter::Range>, ParseError> {
-        let kind = match self.parser.node_matcher.lookup(node.kind_id()) {
-            Some(ConcreteNode::TopLevelDef) => TopLevelDefKind::Def,
-            Some(ConcreteNode::TopLevelLet) => TopLevelDefKind::Let,
+    fn parse_top_level_decl<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<TopLevelDef<'b, tree_sitter::Range>, ParseError> {
+        let body = match self.parser.node_matcher.lookup(node.kind_id()) {
+            Some(ConcreteNode::TopLevelDef) => {
+                let type_ = self.parse_type(self.field(node, Field::Type))?;
+                let expr = self.parse_expr(self.field(node, Field::Body))?;
+                TopLevelDefBody::Def {
+                    kind: TopLevelDefKind::Def,
+                    type_,
+                    expr: self.alloc(expr),
+                }
+            },
+            Some(ConcreteNode::TopLevelLet) => {
+                let type_ = self.parse_type(self.field(node, Field::Type))?;
+                let expr = self.parse_expr(self.field(node, Field::Body))?;
+                TopLevelDefBody::Def {
+                    kind: TopLevelDefKind::Let,
+                    type_,
+                    expr: self.alloc(expr),
+                }
+            },
+            Some(ConcreteNode::TopLevelClock) => TopLevelDefBody::Clock {
+                freq: self.parse_freq(self.field(node, Field::Frequency))?,
+            },
             _ => return Err(ParseError::UhhhhhhWhat(node.range(), "expected a top-level let here".to_string()))
         };
 
-        let body = self.parse_expr(self.field(node, Field::Body))?;
         Ok(TopLevelDef {
-            kind,
             name: self.identifier(self.field(node, Field::Ident)),
-            type_: self.parse_type(self.field(node, Field::Type))?,
-            body: self.alloc(body),
             range: node.range(),
+            body,
         })
+    }
+
+    fn parse_freq<'d>(&self, node: tree_sitter::Node<'d>) -> Result<f32, ParseError> {
+        let freq_text = self.node_text(node);
+        freq_text.parse().map_err(|_| ParseError::BadLiteral(node.range()))
     }
 
     fn parse_expr<'d>(&mut self, node: tree_sitter::Node<'d>) -> Result<Expr<'b, tree_sitter::Range>, ParseError> {
