@@ -1,23 +1,14 @@
 use std::path::Path;
 use std::process::ExitCode;
-use std::{collections::HashMap, path::PathBuf, fs::File};
+use std::{path::PathBuf, fs::File};
 use std::io::{Read, Write};
-
-use clocky::expr::{Expr, Symbol};
-use num::One;
 
 use typed_arena::Arena;
 
 use clap::Parser as CliParser;
 
-use clocky::builtin::make_builtins;
-use clocky::interp::get_samples;
 use clocky::parse;
-use clocky::typing::{self, Ctx};
-use clocky::interp;
 use clocky::toplevel::{compile, TopLevel, TopLevelError, TopLevelResult};
-
-use clocky::typing::{Type, TopLevelTypeError, Kind, Clock};
 
 #[derive(CliParser, Debug)]
 struct Args {
@@ -37,26 +28,6 @@ enum Command {
     },
     /// Type-check the given program.
     Typecheck {
-        /// Code file to use
-        file: Option<PathBuf>,
-    },
-    /// Interpret the given program.
-    Interpret {
-        /// Code file to use
-        file: Option<PathBuf>,
-    },
-    /// Launch a REPL
-    Repl,
-    /// Write out a WAV file, sampling the stream specified in the code
-    Sample {
-        /// Path to WAV file to be written
-        #[arg(short='o')]
-        out: PathBuf,
-
-        /// How long (in milliseconds at 48kHz) to sample for
-        #[arg(short='l', default_value_t=1000)]
-        length: usize,
-
         /// Code file to use
         file: Option<PathBuf>,
     },
@@ -113,129 +84,6 @@ fn cmd_typecheck<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopL
         Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
     };
     toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
-    Ok(())
-}
-
-fn cmd_interpret<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
-    let code = read_file(file.as_deref())?;
-    let parsed_file = match toplevel.make_parser().parse_file(&code) {
-        Ok(parsed_file) => parsed_file,
-        Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
-    };
-    let elabbed_file = toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
-
-    let arena = Arena::new();
-    let defs: HashMap<Symbol, &Expr<'_, ()>> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.get_expr().unwrap().map_ext(&arena, &(|_| ()))))).collect();
-    let main = *defs.get(&parsed_file.defs.last().unwrap().name).unwrap();
-    let builtins = make_builtins(&mut toplevel.interner);
-    let interp_ctx = interp::InterpretationContext { builtins: &builtins, defs: &defs, env: HashMap::new() };
-
-    match interp::interp(&interp_ctx, &main) {
-        Ok(v) => println!("{:?}", v),
-        Err(e) => return Err(TopLevelError::InterpError(e.into())),
-    }
-
-    Ok(())
-}
-
-fn repl_one<'a>(toplevel: &mut TopLevel<'a>, interp_ctx: &interp::InterpretationContext<'a, '_>, code: String) -> TopLevelResult<'a, ()> {
-    // this seems like a hack, but it seems like tree-sitter doesn't
-    // support parsing specific rules yet...
-    let code = format!("def main: unit = {}", code);
-    let expr = match toplevel.make_parser().parse_file(&code) {
-        Ok(parsed_file) => parsed_file.defs[0].body.get_expr().unwrap(),
-        Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
-    };
-    let empty_symbol = toplevel.interner.get_or_intern_static("");
-    let (expr_elab, ty) = toplevel
-        .make_typechecker()
-        .synthesize(&Ctx::Empty, expr)
-        .map_err(|e| TopLevelError::TypeError(code, typing::FileTypeErrors { errs: vec![TopLevelTypeError::TypeError(empty_symbol, e)] } ))?;
-    println!("synthesized type: {}", ty.pretty(&toplevel.interner));
-
-    let arena = Arena::new();
-    let expr_unannotated = expr_elab.map_ext(&arena, &(|_| ()));
-
-    match interp::interp(&interp_ctx, &expr_unannotated) {
-        Ok(v) => println!("{:?}", v),
-        Err(e) => return Err(TopLevelError::InterpError(e.into())),
-    }
-
-    Ok(())
-}
-
-fn cmd_repl<'a>(toplevel: &mut TopLevel<'a>) -> TopLevelResult<'a, ()> {
-    let builtins = make_builtins(&mut toplevel.interner);
-    let interp_ctx = interp::InterpretationContext { builtins: &builtins, defs: &HashMap::new(), env: HashMap::new() };
-
-    for line in std::io::stdin().lines() {
-        match repl_one(toplevel, &interp_ctx, line?) {
-            Ok(()) => { },
-            Err(err @ TopLevelError::IoError(_)) => { return Err(err); },
-            Err(TopLevelError::TypeError(code, e)) => {
-                let TopLevelTypeError::TypeError(_, ref err) = e.errs[0] else { panic!() };
-                println!("{}", err.pretty(&toplevel.interner, &code));
-            },
-            Err(err) => { println!("{:?}", err); },
-        }
-    }
-
-    Ok(())
-}
-
-fn verify_sample_type<'a>(type_: &Type) -> TopLevelResult<'a, ()> {
-    match *type_ {
-        Type::Forall(x, Kind::Clock, ref st) =>
-            match **st {
-                Type::Stream(Clock { coeff, var }, ref inner)
-                    if x == var && coeff.is_one() =>
-                    match **inner {
-                        Type::Sample =>
-                            Ok(()),
-                        _ => Err(TopLevelError::CannotSample(type_.clone())),
-                    },
-                _ =>
-                    Err(TopLevelError::CannotSample(type_.clone())),
-            },
-        _ =>
-            Err(TopLevelError::CannotSample(type_.clone())),
-    }
-}
-
-fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, length: usize, out: PathBuf) -> TopLevelResult<'a, ()> {
-    let code = read_file(file.as_deref())?;
-    let parsed_file = match toplevel.make_parser().parse_file(&code) {
-        Ok(parsed_file) => parsed_file,
-        Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
-    };
-    let elabbed_file = toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
-
-    let arena = Arena::new();
-    let defs: HashMap<Symbol, &Expr<'_, ()>> = elabbed_file.defs.iter().map(|def| (def.name, &*arena.alloc(def.body.get_expr().unwrap().map_ext(&arena, &(|_| ()))))).collect();
-    let main_sym = toplevel.interner.get_or_intern_static("main");
-    let main_def = parsed_file.defs.iter().filter(|x| x.name == main_sym).next().unwrap();
-    verify_sample_type(&main_def.body.get_type().unwrap())?;
-    let main = *defs.get(&parsed_file.defs.last().unwrap().name).unwrap();
-    let builtins = make_builtins(&mut toplevel.interner);
-    let mut samples = [0.0].repeat(48 * length);
-
-    match get_samples(&builtins, &defs, main, &mut samples[..]) {
-        Ok(()) => { },
-        Err(e) => return Err(TopLevelError::InterpError(e)),
-    }
-
-    let wav_spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: 48000,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
-    };
-    let mut hound_writer = hound::WavWriter::create(out, wav_spec)?;
-    // is this really the only way hound will let me do this??
-    for samp in samples {
-        hound_writer.write_sample(samp)?;
-    }
-
     Ok(())
 }
 
@@ -366,9 +214,6 @@ fn main() -> Result<(), ExitCode> {
     let res = match args.cmd {
         Command::Parse { file, dump_to } => cmd_parse(&mut toplevel, file, dump_to),
         Command::Typecheck { file } => cmd_typecheck(&mut toplevel, file),
-        Command::Interpret { file } => cmd_interpret(&mut toplevel, file),
-        Command::Repl => cmd_repl(&mut toplevel),
-        Command::Sample { out, file, length } => cmd_sample(&mut toplevel, file, length, out),
         Command::Compile { file, out } => cmd_compile(&mut toplevel, file, out),
     };
 

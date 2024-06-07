@@ -1,7 +1,6 @@
 pub mod expr;
 pub mod builtin;
 pub mod parse;
-pub mod interp;
 pub mod typing;
 pub mod ir1;
 pub mod ir2;

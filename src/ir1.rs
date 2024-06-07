@@ -386,8 +386,6 @@ impl<'a> Translator<'a> {
                 Expr::Val(Value::Sample(x)),
             HExpr::Val(_, HValue::Index(i)) =>
                 Expr::Val(Value::Index(i)),
-            HExpr::Val(_, _) =>
-                panic!("weird value??"),
             HExpr::Annotate(_, next, _) =>
                 self.translate(ctx, next),
             HExpr::Lam(_, x, next) => {

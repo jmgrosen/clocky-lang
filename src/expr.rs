@@ -1,35 +1,18 @@
-use std::collections::HashMap;
 use std::fmt;
 
 use string_interner::{DefaultStringInterner, DefaultSymbol};
 use typed_arena::Arena;
 
-use crate::builtin::Builtin;
 use crate::typing::{Clock, Type, PrettyClock, PrettyType};
 
 pub type Symbol = DefaultSymbol;
 
 #[derive(Debug, Clone)]
-pub enum Value<'a> {
+pub enum Value {
     Unit,
     Sample(f32),
     Index(usize),
-    Pair(Box<Value<'a>>, Box<Value<'a>>),
-    InL(Box<Value<'a>>),
-    InR(Box<Value<'a>>),
-    Gen(Box<Value<'a>>, Box<Value<'a>>),
-    Closure(Env<'a>, Symbol, &'a Expr<'a, ()>),
-    Suspend(Env<'a>, &'a Expr<'a, ()>),
-    BuiltinPartial(Builtin, Box<[Value<'a>]>),
-    Array(Box<[Value<'a>]>),
-    Box(Env<'a>, &'a Expr<'a, ()>),
-    // TODO: this is a bit of a hack
-    BoxDelay(Env<'a>, &'a Expr<'a, ()>),
 }
-
-// TODO: use a better type here... eventually we should resolve symbols and just use de bruijn offsets or similar...
-pub type Env<'a> = HashMap<Symbol, Value<'a>>;
-// type Env<'a> = imbl::HashMap<Symbol, Value<'a>>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Binop {
@@ -84,7 +67,7 @@ impl Binop {
 #[derive(Debug, Clone)]
 pub enum Expr<'a, R> {
     Var(R, Symbol),
-    Val(R, Value<'a>),
+    Val(R, Value),
     Annotate(R, &'a Expr<'a, R>, Type),
     Lam(R, Symbol, &'a Expr<'a, R>),
     App(R, &'a Expr<'a, R>, &'a Expr<'a, R>),

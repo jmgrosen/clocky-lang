@@ -991,7 +991,6 @@ impl<'a, 'b, R: Clone> Typechecker<'a, 'b, R> {
                     Value::Unit => Ok((self.alloc(Expr::Val(r.clone(), Value::Unit)), Type::Unit)),
                     Value::Sample(s) => Ok((self.alloc(Expr::Val(r.clone(), Value::Sample(s))), Type::Sample)),
                     Value::Index(i) => Ok((self.alloc(Expr::Val(r.clone(), Value::Index(i))), Type::Index)),
-                    _ => panic!("trying to type {v:?} but that kind of value shouldn't be created yet?"),
                 },
             &Expr::Var(ref r, x) =>
                 if let Some((timing, ty)) = ctx.lookup_term_var(x) {
