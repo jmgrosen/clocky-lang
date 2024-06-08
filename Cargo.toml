@@ -12,6 +12,7 @@ cc="*"
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }
 hound = "3.5.1"
+byteorder = "1.5.0"
 string-interner = "0.15"
 tree-sitter = { package = "tree-sitter-c2rust", version = "0.20" }
 tree-sitter-clocky = { path = "tree-sitter-clocky" }
@@ -29,11 +30,12 @@ clocky-runtime = { path = "runtime", artifact = "cdylib", target = "wasm32-unkno
 wasm-bindgen = "0.2"
 
 [features]
+default = ["run"]
 run = ["dep:wasmtime"]
 
 [profile.release]
 debug = false
-lto = true
+lto = false
 
 [lib]
 name = "clocky"

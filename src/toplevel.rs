@@ -55,7 +55,6 @@ pub enum TopLevelError<'a> {
     TypeError(String, typing::FileTypeErrors<'a, tree_sitter::Range>),
     InterpError(String),
     CannotSample(Type),
-    WavError(hound::Error),
 }
 
 impl<'a> fmt::Display for TopLevelError<'a> {
@@ -73,7 +72,6 @@ impl<'a> Error for TopLevelError<'a> {
             TopLevelError::TypeError(_, _) => None,
             TopLevelError::InterpError(_) => None,
             TopLevelError::CannotSample(_) => None,
-            TopLevelError::WavError(ref err) => Some(err),
         }
     }
 }
@@ -81,12 +79,6 @@ impl<'a> Error for TopLevelError<'a> {
 impl<'a> From<std::io::Error> for TopLevelError<'a> {
     fn from(err: std::io::Error) -> TopLevelError<'a> {
         TopLevelError::IoError(err)
-    }
-}
-
-impl<'a> From<hound::Error> for TopLevelError<'a> {
-    fn from(err: hound::Error) -> TopLevelError<'a> {
-        TopLevelError::WavError(err)
     }
 }
 

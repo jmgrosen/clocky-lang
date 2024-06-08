@@ -3,6 +3,8 @@ use std::process::ExitCode;
 use std::{path::PathBuf, fs::File};
 use std::io::{Read, Write};
 
+use byteorder::{LittleEndian, ReadBytesExt};
+
 use typed_arena::Arena;
 
 use clap::Parser as CliParser;
@@ -38,6 +40,18 @@ enum Command {
         /// Path to wasm module file to be written
         #[arg(short='o')]
         out: Option<PathBuf>,
+    },
+    #[cfg(feature="run")]
+    Sample {
+        /// Code file to use
+        file: Option<PathBuf>,
+
+        /// Path to wav file to write to
+        out: PathBuf,
+
+        /// Length of time to sample for
+        #[arg(short='l', default_value_t=10.0)]
+        length: f32,
     },
 }
 
@@ -90,119 +104,54 @@ fn cmd_typecheck<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopL
 fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Option<PathBuf>) -> TopLevelResult<'a, ()> {
     let code = read_file(file.as_deref())?;
     let wasm_bytes = compile(toplevel, code)?;
-    let orig_wasm_bytes = wasm_bytes.clone();
 
     write_file(out.as_deref(), &wasm_bytes)?;
-
-    //wasmparser::validate(&wasm_bytes).unwrap();
-
-    run(orig_wasm_bytes);
 
     Ok(())
 }
 
 #[cfg(feature="run")]
-fn run(mut wasm_bytes: Vec<u8>) {
-    let wasm_mod = wasm_bytes.clone();
-    use wasmparser::{Chunk, Payload::*};
-    let mut validator = wasmparser::Validator::new();
-    let mut cur = wasmparser::Parser::new(0);
-    let mut stack = Vec::new();
+fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: PathBuf, length: f32) -> TopLevelResult<'a, ()> {
+    let code = read_file(file.as_deref())?;
+    let wasm_bytes = compile(toplevel, code)?;
 
-    loop {
-        let (payload, consumed) = match cur.parse(&wasm_bytes, false).unwrap() {
-            Chunk::NeedMoreData(_) => {
-                break;
-            }
-
-            Chunk::Parsed { consumed, payload } => (payload, consumed),
-        };
-
-        println!("{payload:?}");
-        match validator.payload(&payload).unwrap() {
-            wasmparser::ValidPayload::Func(func, body) => {
-                let mut v = func.into_validator(Default::default());
-                v.validate(&body).unwrap();
-            },
-            _ => {}
-        }
-        match payload {
-            // Sections for WebAssembly modules
-            Version { .. } => { /* ... */ }
-            TypeSection(_) => { /* ... */ }
-            ImportSection(_) => { /* ... */ }
-            FunctionSection(_) => { /* ... */ }
-            TableSection(_) => { /* ... */ }
-            MemorySection(_) => { /* ... */ }
-            TagSection(_) => { /* ... */ }
-            GlobalSection(_) => { /* ... */ }
-            ExportSection(_) => { /* ... */ }
-            StartSection { .. } => { /* ... */ }
-            ElementSection(_) => { /* ... */ }
-            DataCountSection { .. } => { /* ... */ }
-            DataSection(_) => { /* ... */ }
-
-            // Here we know how many functions we'll be receiving as
-            // `CodeSectionEntry`, so we can prepare for that, and
-            // afterwards we can parse and handle each function
-            // individually.
-            CodeSectionStart { .. } => { /* ... */ }
-            CodeSectionEntry(_) => {
-                // here we can iterate over `body` to parse the function
-                // and its locals
-            }
-
-            // Sections for WebAssembly components
-            InstanceSection(_) => { /* ... */ }
-            CoreTypeSection(_) => { /* ... */ }
-            ComponentInstanceSection(_) => { /* ... */ }
-            ComponentAliasSection(_) => { /* ... */ }
-            ComponentTypeSection(_) => { /* ... */ }
-            ComponentCanonicalSection(_) => { /* ... */ }
-            ComponentStartSection { .. } => { /* ... */ }
-            ComponentImportSection(_) => { /* ... */ }
-            ComponentExportSection(_) => { /* ... */ }
-
-            ModuleSection { parser, .. }
-            | ComponentSection { parser, .. } => {
-                stack.push(cur.clone());
-                cur = parser.clone();
-            }
-
-            CustomSection(_) => { /* ... */ }
-
-            // most likely you'd return an error here
-            UnknownSection { .. } => { /* ... */ }
-
-            // Once we've reached the end of a parser we either resume
-            // at the parent parser or we break out of the loop because
-            // we're done.
-            End(_) => {
-                if let Some(parent_parser) = stack.pop() {
-                    cur = parent_parser;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        // once we're done processing the payload we can forget the
-        // original.
-        wasm_bytes.drain(..consumed);
-    }
     let engine = wasmtime::Engine::default();
-    let module = wasmtime::Module::new(&engine, &wasm_mod).unwrap();
+    let module = wasmtime::Module::new(&engine, &wasm_bytes).unwrap();
     for export in module.exports() {
         println!("{export:?}");
     }
     let linker = wasmtime::Linker::new(&engine);
     let mut store: wasmtime::Store<()> = wasmtime::Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &module).unwrap();
-    println!("main: {:?}", instance.get_global(&mut store, "main").unwrap().get(&mut store));
-}
+    let memory = instance.get_memory(&mut store, "memory").unwrap();
 
-#[cfg(not(feature="run"))]
-fn run(_wasm_bytes: Vec<u8>) {
+    let alloc = instance.get_typed_func::<u32, u32>(&mut store, "alloc").unwrap();
+    let sample_scheduler = instance.get_typed_func::<(u32, u32, u32), u32>(&mut store, "sample_scheduler").unwrap();
+
+    let samples_ptr = alloc.call(&mut store, 4 * 128).unwrap();
+    let mut main = instance.get_global(&mut store, "main").unwrap().get(&mut store).unwrap_i32() as u32;
+
+    let wav_spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 48000,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut hound_writer = hound::WavWriter::create(out, wav_spec).unwrap();
+
+    const CHUNK_SIZE: u32 = 128;
+    let num_chunks = (length * 48000.0 / (CHUNK_SIZE as f32)) as usize;
+    for _ in 0..num_chunks {
+        main = sample_scheduler.call(&mut store, (main, CHUNK_SIZE, samples_ptr)).unwrap();
+        let mut samples_buf = [0u8; CHUNK_SIZE as usize*4];
+        memory.read(&mut store, samples_ptr as usize, &mut samples_buf).unwrap();
+        let mut remaining_samples = &samples_buf[..];
+        while remaining_samples.len() > 0 {
+            hound_writer.write_sample(remaining_samples.read_f32::<LittleEndian>().unwrap()).unwrap();
+        }
+    }
+
+    Ok(())
 }
 
 fn main() -> Result<(), ExitCode> {
@@ -215,6 +164,8 @@ fn main() -> Result<(), ExitCode> {
         Command::Parse { file, dump_to } => cmd_parse(&mut toplevel, file, dump_to),
         Command::Typecheck { file } => cmd_typecheck(&mut toplevel, file),
         Command::Compile { file, out } => cmd_compile(&mut toplevel, file, out),
+        #[cfg(feature = "run")]
+        Command::Sample { file, out, length } => cmd_sample(&mut toplevel, file, out, length),
     };
 
     match res {
