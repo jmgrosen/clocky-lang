@@ -112,8 +112,17 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
 
 #[cfg(feature="run")]
 fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: PathBuf, length: f32) -> TopLevelResult<'a, ()> {
-    let code = read_file(file.as_deref())?;
-    let wasm_bytes = compile(toplevel, code)?;
+    let wasm_bytes = match file.as_ref().map(|p| p.extension()) {
+        Some(Some(ext)) if ext == "wasm" => {
+            let mut buf = Vec::new();
+            File::open(file.unwrap())?.read_to_end(&mut buf)?;
+            buf
+        },
+        _ => {
+            let code = read_file(file.as_deref())?;
+            compile(toplevel, code)?
+        },
+    };
 
     let engine = wasmtime::Engine::default();
     let module = wasmtime::Module::new(&engine, &wasm_bytes).unwrap();
