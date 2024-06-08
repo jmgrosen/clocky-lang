@@ -124,11 +124,11 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: PathB
         },
     };
 
-    let engine = wasmtime::Engine::default();
+    let engine = wasmtime::Engine::new(
+        &wasmtime::Config::new()
+            .profiler(wasmtime::ProfilingStrategy::PerfMap)
+    ).unwrap();
     let module = wasmtime::Module::new(&engine, &wasm_bytes).unwrap();
-    for export in module.exports() {
-        println!("{export:?}");
-    }
     let linker = wasmtime::Linker::new(&engine);
     let mut store: wasmtime::Store<()> = wasmtime::Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &module).unwrap();

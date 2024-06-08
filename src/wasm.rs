@@ -24,11 +24,13 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], partial_app_def_offset: u32,
     // exports.export("memory", wasm::ExportKind::Memory, 0);
     let mut function_types = FunctionTypes { types: runtime.types.clone() };
     let mut globals_out = wasm::GlobalSection::new();
+    let mut names = wasm::NameSection::new();
     let mut init_func = wasm::Function::new_with_locals_types([wasm::ValType::I32]);
     init_func.instruction(&wasm::Instruction::Call(runtime.exports["init_scheduler"].1));
 
     runtime.emit_functions(&mut functions);
     runtime.emit_globals(&mut globals_out);
+    runtime.emit_names(&mut names);
 
     let bad_global = globals_out.len();
     globals_out.global(
@@ -150,6 +152,7 @@ pub fn translate<'a>(global_defs: &[GlobalDef<'a>], partial_app_def_offset: u32,
     module.section(&wasm::StartSection { function_index: functions.len() - 1 });
     module.section(&elems);
     module.section(&codes);
+    module.section(&names);
 
     module.finish()
 }

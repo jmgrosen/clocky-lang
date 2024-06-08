@@ -3,6 +3,7 @@ use std::ops::Range;
 
 use indexmap::IndexSet;
 use wasm_encoder as wasm;
+use wasmparser::{Name, NameSectionReader};
 
 pub struct Global {
     pub ty: wasm::GlobalType,
@@ -20,6 +21,7 @@ pub struct Runtime<'a> {
     pub data: Vec<wasmparser::Data<'a>>,
     pub globals: Vec<Global>,
     pub elem: Option<wasmparser::Element<'a>>,
+    pub function_names: Vec<wasmparser::Naming<'a>>,
 }
 
 fn valtype_to_valtype(ty: &wasmparser::ValType) -> wasm_encoder::ValType {
@@ -92,6 +94,7 @@ impl<'a> Runtime<'a> {
         let mut data = Vec::with_capacity(0);
         let mut found_table = false;
         let mut elem = None;
+        let mut function_names = Vec::new();
         for payload in parser.parse_all(buf) {
             match payload.unwrap() {
                 Version { .. } => { }
@@ -159,7 +162,21 @@ impl<'a> Runtime<'a> {
                     code.push(body.range());
                 }
 
-                CustomSection(_) => { }
+                CustomSection(custom_sec) => {
+                    if custom_sec.name() == "name" {
+                        let name_reader = NameSectionReader::new(custom_sec.data(), custom_sec.data_offset());
+                        for name in name_reader {
+                            match name.unwrap() {
+                                Name::Function(function_name_map) => {
+                                    function_names.extend(function_name_map.into_iter().map(|n| n.unwrap()));
+                                }
+                                // TODO: handle more names
+                                _ => {
+                                }
+                            }
+                        }
+                    }
+                }
 
                 End(_) => { }
 
@@ -177,6 +194,7 @@ impl<'a> Runtime<'a> {
             data,
             globals,
             elem,
+            function_names,
         }
     }
 
@@ -242,5 +260,13 @@ impl<'a> Runtime<'a> {
                 panic!("only support active element segments in the runtime")
             }
         }
+    }
+
+    pub fn emit_names(&self, names: &mut wasm::NameSection) {
+        let mut func_name_map = wasm::NameMap::new();
+        for name in self.function_names.iter() {
+            func_name_map.append(name.index, name.name);
+        }
+        names.functions(&func_name_map);
     }
 }
