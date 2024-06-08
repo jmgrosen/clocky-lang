@@ -5,63 +5,114 @@ use string_interner::DefaultStringInterner;
 use crate::expr::Symbol;
 use crate::ir1::{DebruijnIndex, Op};
 use crate::ir2;
+use crate::typing::{Clock, Kind, Type};
+
+type BuiltinTypeFn = fn(&mut DefaultStringInterner) -> Type;
 
 #[derive(Clone, Copy, Debug)]
-pub struct Builtin {
+pub struct Builtin<Ty> {
     pub n_args: usize,
+    // there's gotta be a better way to do this
+    pub type_: Ty,
     pub ir2_expr: &'static ir2::Expr<'static>,
 }
 
-impl Builtin {
-    const fn new(n_args: usize, ir2_expr: &'static ir2::Expr<'static>) -> Builtin {
-        Builtin { n_args, ir2_expr }
+impl<Ty> Builtin<Ty> {
+    const fn new(n_args: usize, type_: Ty, ir2_expr: &'static ir2::Expr<'static>) -> Builtin<Ty> {
+        Builtin { n_args, type_, ir2_expr }
     }
 }
 
 macro_rules! builtins {
-    ( $($name:ident [ $nargs:literal ] [ $ir2e:expr ] ),* $(,)? ) => {
-        const BUILTINS: &[(&'static str, Builtin)] = &[
+    ( $($name:ident [ $nargs:literal ] { $interner:pat => $type_expr:expr } [ $ir2e:expr ] ),* $(,)? ) => {
+        mod builtin_types {
+            use super::*;
+
             $(
-                (stringify!($name), Builtin::new($nargs, $ir2e)),
+                pub fn $name($interner: &mut DefaultStringInterner) -> Type {
+                    $type_expr
+                }
+            )*
+        }
+        const BUILTINS: &[(&'static str, Builtin<BuiltinTypeFn>)] = &[
+            $(
+                (stringify!($name), Builtin::new($nargs, builtin_types::$name, $ir2e)),
             )*
         ];
     }
 }
 
+fn g(interner: &mut DefaultStringInterner, name: &'static str) -> Symbol {
+    interner.get_or_intern_static(name)
+}
+
 builtins!(
     pi[0]
+      { _ => Type::Sample }
       [ &ir2::Expr::Op(Op::Pi, &[]) ],
     sin[1]
+      { _ => Type::Function(Type::Sample.into(), Type::Sample.into()) }
       [ &ir2::Expr::Op(Op::Sin, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
     cos[1]
+      { _ => Type::Function(Type::Sample.into(), Type::Sample.into()) }
       [ &ir2::Expr::Op(Op::Cos, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
-    add[2]
-      [ &ir2::Expr::Op(Op::FAdd, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
-    sub[2]
-      // TODO: make sure this order is correct?
-      [ &ir2::Expr::Op(Op::FSub, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
-    mul[2]
-      [ &ir2::Expr::Op(Op::FMul, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
-    div[2]
-      [ &ir2::Expr::Op(Op::FDiv, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Var(DebruijnIndex(1))]) ],
-    addone[1]
-      [ &ir2::Expr::Op(Op::FAdd, &[&ir2::Expr::Var(DebruijnIndex(0)), &ir2::Expr::Op(Op::Const(crate::ir1::Value::Sample(1.0)), &[])]) ],
     reinterpi[1]
+      { _ => Type::Function(Type::Index.into(), Type::Sample.into()) }
       [ &ir2::Expr::Op(Op::ReinterpI2F, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
     reinterpf[1]
+      { _ => Type::Function(Type::Sample.into(), Type::Index.into()) }
       [ &ir2::Expr::Op(Op::ReinterpF2I, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
     cast[1]
+      { _ => Type::Function(Type::Index.into(), Type::Sample.into()) }
       [ &ir2::Expr::Op(Op::CastI2F, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
     since_tick[1]
+      { i => Type::Forall(g(i, "c"), Kind::Clock, Type::Stream(Clock::from_var(g(i, "c")), Type::Sample.into()).into()) }
       [ &ir2::Expr::Op(Op::SinceLastTickStream, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
     wait[1]
+      { i => Type::Forall(g(i, "c"), Kind::Clock, Type::Later(Clock::from_var(g(i, "c")), Type::Unit.into()).into()) }
       [ &ir2::Expr::Op(Op::Wait, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
     sched[3]
+      { i =>
+          Type::Forall(g(i, "a"), Kind::Type, Box::new(
+              Type::Forall(g(i, "c"), Kind::Clock, Box::new(
+                  Type::Forall(g(i, "d"), Kind::Clock, Box::new(
+                      Type::Function(Box::new(
+                          Type::Later(Clock::from_var(g(i, "c")), Box::new(Type::TypeVar(g(i, "a"))))
+                      ), Box::new(
+                          Type::Later(Clock::from_var(g(i, "d")), Box::new(
+                              Type::Sum(Box::new(
+                                  Type::Unit
+                              ), Box::new(
+                                  Type::TypeVar(g(i, "a"))
+                              ))
+                          ))
+                      ))
+                  ))
+              ))
+          ))
+      }
       [ &ir2::Expr::Op(Op::Schedule, &[&ir2::Expr::Var(DebruijnIndex(2)), &ir2::Expr::Var(DebruijnIndex(1)), &ir2::Expr::Var(DebruijnIndex(0))]) ],
 );
 
-pub type BuiltinsMap = HashMap<Symbol, Builtin>;
+pub type BuiltinsMap = HashMap<Symbol, Builtin<Type>>;
 
 pub fn make_builtins(interner: &mut DefaultStringInterner) -> BuiltinsMap {
-    BUILTINS.iter().map(|&(name, builtin)| (interner.get_or_intern_static(name), builtin)).collect()
+    BUILTINS.iter().map(|&(name, builtin)| {
+        let builtin_constructed = Builtin {
+            n_args: builtin.n_args,
+            type_: (builtin.type_)(interner),
+            ir2_expr: builtin.ir2_expr,
+        };
+        (interner.get_or_intern_static(name), builtin_constructed)
+    }).collect()
+}
+
+// TODO: need to synchronize the order of these with the
+// runtime. maybe we could fetch these from the runtime somehow? hmmmm
+const BUILTIN_CLOCKS: &[&'static str] = &[
+    "audio",
+];
+
+pub fn make_builtin_clocks(interner: &mut DefaultStringInterner) -> Vec<Symbol> {
+    BUILTIN_CLOCKS.iter().map(|&name| interner.get_or_intern_static(name)).collect()
 }

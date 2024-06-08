@@ -1,82 +1,35 @@
 use std::fmt;
 use std::error::Error;
-use std::iter;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::expr::{Expr, Symbol, TopLevelDefBody};
 use string_interner::{StringInterner, DefaultStringInterner};
 
 use typed_arena::Arena;
 
-use crate::builtin::make_builtins;
+use crate::builtin::{make_builtin_clocks, make_builtins, BuiltinsMap};
 use crate::parse::{self, Parser};
 use crate::typing::{self, Globals, Typechecker};
 use crate::{ir1, ir2, wasm, util};
 
-use crate::typing::{Type, Kind, Clock};
+use crate::typing::Type;
 
 pub struct TopLevel<'a> {
     pub interner: DefaultStringInterner,
     pub arena: &'a Arena<Expr<'a, tree_sitter::Range>>,
+    pub builtins: BuiltinsMap,
     pub globals: Globals,
-    pub global_clocks: HashSet<Symbol>,
+    pub global_clocks: Vec<Symbol>,
 }
 
 impl<'a> TopLevel<'a> {
     pub fn new(arena: &'a Arena<Expr<'a, tree_sitter::Range>>) -> TopLevel<'a> {
         let mut interner = StringInterner::new();
-        let mut globals: Globals = HashMap::new();
+        let builtins = make_builtins(&mut interner);
+        let globals = builtins.iter().map(|(&name, builtin)| (name, builtin.type_.clone())).collect();
+        let builtin_clocks = make_builtin_clocks(&mut interner);
 
-        // TODO: move this to the builtins themselves
-        let add = interner.get_or_intern_static("add");
-        let div = interner.get_or_intern_static("div");
-        let mul = interner.get_or_intern_static("mul");
-        let pi = interner.get_or_intern_static("pi");
-        let sin = interner.get_or_intern_static("sin");
-        let addone = interner.get_or_intern_static("addone");
-        let reinterpi = interner.get_or_intern_static("reinterpi");
-        let reinterpf = interner.get_or_intern_static("reinterpf");
-        let cast = interner.get_or_intern_static("cast");
-        globals.insert(add, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
-        globals.insert(div, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
-        globals.insert(mul, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)))));
-        globals.insert(pi, typing::Type::Sample);
-        globals.insert(sin, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
-        globals.insert(addone, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Sample)));
-        globals.insert(reinterpi, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
-        globals.insert(reinterpf, typing::Type::Function(Box::new(typing::Type::Sample), Box::new(typing::Type::Index)));
-        globals.insert(cast, typing::Type::Function(Box::new(typing::Type::Index), Box::new(typing::Type::Sample)));
-        let since_tick = interner.get_or_intern_static("since_tick");
-        let c = interner.get_or_intern_static("c");
-        globals.insert(since_tick, typing::Type::Forall(c, Kind::Clock, Box::new(typing::Type::Stream(typing::Clock::from_var(c), Box::new(typing::Type::Sample)))));
-        let wait = interner.get_or_intern_static("wait");
-        globals.insert(wait, typing::Type::Forall(c, Kind::Clock, Box::new(typing::Type::Later(Clock::from_var(c), Box::new(typing::Type::Unit)))));
-        let sched = interner.get_or_intern_static("sched");
-        let a = interner.get_or_intern_static("a");
-        let d = interner.get_or_intern_static("d");
-        globals.insert(sched, typing::Type::Forall(a, Kind::Type, Box::new(
-            typing::Type::Forall(c, Kind::Clock, Box::new(
-                typing::Type::Forall(d, Kind::Clock, Box::new(
-                    typing::Type::Function(Box::new(
-                        typing::Type::Later(Clock::from_var(c), Box::new(Type::TypeVar(a)))
-                    ), Box::new(
-                        typing::Type::Later(Clock::from_var(d), Box::new(
-                            Type::Sum(Box::new(
-                                Type::Unit
-                            ), Box::new(
-                                Type::TypeVar(a)
-                            ))
-                        ))
-                    ))
-                ))
-            ))
-        )));
-
-        let mut global_clock_names = HashSet::new();
-        let audio = interner.get_or_intern_static("audio");
-        global_clock_names.insert(audio);
-
-        TopLevel { arena, interner, globals, global_clocks: global_clock_names }
+        TopLevel { arena, interner, builtins, globals, global_clocks: builtin_clocks }
     }
 
     pub fn make_parser<'b>(&'b mut self) -> Parser<'b, 'a> {
@@ -164,10 +117,9 @@ pub fn compile<'a>(toplevel: &mut TopLevel<'a>, code: String) -> TopLevelResult<
 
     let defs = elabbed_file.defs;
 
-    let builtins = make_builtins(&mut toplevel.interner);
     let mut builtin_globals = HashMap::new();
     let mut global_defs = Vec::new();
-    for (name, builtin) in builtins.into_iter() {
+    for (&name, builtin) in toplevel.builtins.iter() {
         builtin_globals.insert(name, ir1::Global(global_defs.len() as u32));
         global_defs.push(ir2::GlobalDef::Func {
             rec: false,
@@ -178,11 +130,12 @@ pub fn compile<'a>(toplevel: &mut TopLevel<'a>, code: String) -> TopLevelResult<
     }
 
     let mut global_clocks = HashMap::new();
-    let audio = toplevel.interner.get_or_intern_static("audio");
-    global_clocks.insert(audio, ir1::Global(global_defs.len() as u32));
-    global_defs.push(ir2::GlobalDef::ClosedExpr {
-        body: &ir2::Expr::Var(ir1::DebruijnIndex(0)),
-    });
+    for &name in toplevel.global_clocks.iter() {
+        global_clocks.insert(name, ir1::Global(global_defs.len() as u32));
+        global_defs.push(ir2::GlobalDef::ClosedExpr {
+            body: &ir2::Expr::Var(ir1::DebruijnIndex(0)),
+        });
+    }
     for def in defs.iter() {
         match def.body {
             TopLevelDefBody::Def { .. } => {
@@ -205,11 +158,11 @@ pub fn compile<'a>(toplevel: &mut TopLevel<'a>, code: String) -> TopLevelResult<
 
     
     let mut main = None;
-    let defs_ir1: HashMap<Name, &ir1::Expr<'_>> = iter::once({
+    let defs_ir1: HashMap<Name, &ir1::Expr<'_>> = toplevel.global_clocks.iter().enumerate().map(|(i, &name)| {
         let clock_expr = &*expr_under_arena.alloc(
-            ir1::Expr::Op(ir1::Op::GetClock(0), &[])
+            ir1::Expr::Op(ir1::Op::GetClock(i as u32), &[])
         );
-        (Name::Clock(audio), clock_expr)
+        (Name::Clock(name), clock_expr)
     }).chain(defs.iter().map(|def| {
         match def.body {
             TopLevelDefBody::Def { expr, .. } => {

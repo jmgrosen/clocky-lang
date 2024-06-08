@@ -1,5 +1,5 @@
 use core::fmt;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::rc::Rc;
 use std::fmt::Write;
@@ -771,7 +771,7 @@ impl<'a> fmt::Display for PrettyTypeError<'a, tree_sitter::Range> {
 
 pub struct Typechecker<'a, 'b, R> {
     pub globals: &'a mut Globals,
-    pub global_clocks: &'a HashSet<Symbol>,
+    pub global_clocks: &'a [Symbol],
     pub interner: &'a mut DefaultStringInterner,
     pub arena: &'b Arena<Expr<'b, R>>,
 }
