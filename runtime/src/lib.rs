@@ -150,7 +150,7 @@ struct DelayedValue {
 // target_clock, but if they are triggered by the same clock, the
 // closure really should run first...
 #[no_mangle]
-pub unsafe extern "C" fn schedule(source_clock: *const ClockSet, _target_clock: *const ClockSet, clos: *const Closure) -> *const Closure {
+pub unsafe extern "C" fn schedule(source_clock: *const ClockSet, target_clock: *const ClockSet, clos: *const Closure) -> *const Closure {
     let sched_clos = alloc(mem::size_of::<ScheduledClosure>() as u32) as *mut ScheduledClosure;
     (*sched_clos).func = scheduled_closure_func;
     (*sched_clos).n_args = 0;
@@ -161,6 +161,7 @@ pub unsafe extern "C" fn schedule(source_clock: *const ClockSet, _target_clock: 
 
     SCHEDULER.scheduled_tasks.push(Task {
         triggering_clocks: (*source_clock).clone(),
+        cancelling_clocks: (*target_clock).clone(),
         clos: sched_clos as *const Closure,
     });
 
@@ -219,6 +220,7 @@ type ClockSet = BitSet;
 
 struct Task {
     triggering_clocks: ClockSet,
+    cancelling_clocks: ClockSet,
     clos: *const Closure,
 }
 
@@ -253,7 +255,8 @@ pub unsafe extern "C" fn make_clock(freq: f32) -> *const ClockSet {
     get_clock_set(clock_id)
 }
 
-unsafe fn step_scheduler(dur: f32) {
+#[no_mangle]
+pub unsafe fn step_scheduler(dur: f32) {
     let mut clocks_ticked = BitSet::new();
     for (i, cl) in SCHEDULER.clocks.iter_mut().enumerate() {
         if cl.pass_time(dur) {
@@ -262,7 +265,7 @@ unsafe fn step_scheduler(dur: f32) {
     }
     SCHEDULER.scheduled_tasks.retain_mut(|task| {
         if task.triggering_clocks.is_disjoint(&clocks_ticked) {
-            true
+            task.cancelling_clocks.is_disjoint(&clocks_ticked)
         } else {
             task.run();
             false
