@@ -85,8 +85,8 @@ def wavesunfiltered : for k : clock. ~^(k) sample =
 def shared : for k : clock. ~^(k) sample =
   let wv = wavesunfiltered @(k) in
   sum @(k)
-    (maps @(k) (box (\x. add (0.5 * x) 0.0)) wv)
-    (maps @(k) (box (\x. add (0.5 * x) 0.0)) wv);;
+    (maps @(k) (box (\x. 0.5 * x)) wv)
+    (maps @(k) (box (\x. 0.5 * x)) wv);;
 
 def regen_on_tick : for k1 : clock. for k2 : clock. [](~^(k1) sample) -> ~^(k1) sample =
   \gen.

@@ -11,3 +11,26 @@ def batch2helper: for k : clock.
                          : |>^(2k) |>^(2k) ~^(k) [sample; 2])));;
 def batch2: for k : clock. ~^(2k) sample -> |>^(2k) ~^(k) [sample; 2] =
   let (b, h) = batch2helper @(k) in b;;
+
+let main: ~^(audio) sample =
+  &^(audio) s. 0. :: `(!(unbox s));;
+
+{-
+def unbatch2: for k : clock. ~^(k) [sample; 2] -> ~^(2k) sample =
+  &^(k) ub. \s.
+    let (a, sp) = %s in
+    let [x, y] = a in
+    x :: `(y :: `(!(unbox ub) sp));; 
+
+def persamp: sample = 2. * 3.14159 * 440. / 48000.;;
+let unbatched: ~^(audio) sample = ((&^(audio) s. \x. sin x :: `(!(unbox s) (x + persamp))) : sample -> ~^(audio) sample) 0.0;;
+
+let batched: |>^(audio) ~^(1/2 audio) [sample; 2] =
+  batch2 @(1/2 audio) unbatched;;
+
+let reunbatched: |>^(audio) ~^(audio) sample =
+  `(unbatch2 @(1/2 audio) batched);;
+
+let main: ~^(audio) sample =
+  0. :: reunbatched;;
+-}

@@ -225,3 +225,41 @@ pub fn compile<'a>(toplevel: &mut TopLevel<'a>, code: String) -> TopLevelResult<
 
     Ok(wasm_bytes)
 }
+
+#[cfg(feature="run")]
+pub fn run(wasm_bytes: &[u8], num_samples: usize) -> Vec<f32> {
+    use byteorder::{ReadBytesExt, LittleEndian};
+
+    let engine = wasmtime::Engine::new(
+        &wasmtime::Config::new()
+            .profiler(wasmtime::ProfilingStrategy::PerfMap)
+    ).unwrap();
+    let module = wasmtime::Module::new(&engine, &wasm_bytes).unwrap();
+    let linker = wasmtime::Linker::new(&engine);
+    let mut store: wasmtime::Store<()> = wasmtime::Store::new(&engine, ());
+    let instance = linker.instantiate(&mut store, &module).unwrap();
+    let memory = instance.get_memory(&mut store, "memory").unwrap();
+
+    let alloc = instance.get_typed_func::<u32, u32>(&mut store, "alloc").unwrap();
+    let sample_scheduler = instance.get_typed_func::<(u32, u32, u32), u32>(&mut store, "sample_scheduler").unwrap();
+
+    let samples_ptr = alloc.call(&mut store, 4 * 128).unwrap();
+    let mut main = instance.get_global(&mut store, "main").unwrap().get(&mut store).unwrap_i32() as u32;
+
+    const CHUNK_SIZE: usize = 128;
+    let num_chunks = (num_samples + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let mut all_samples = Vec::with_capacity(num_chunks * CHUNK_SIZE);
+    for _ in 0..num_chunks {
+        main = sample_scheduler.call(&mut store, (main, CHUNK_SIZE as u32, samples_ptr)).unwrap();
+        let mut samples_buf = [0u8; CHUNK_SIZE*4];
+        memory.read(&mut store, samples_ptr as usize, &mut samples_buf).unwrap();
+        // could almost certainly make this more efficient, but it's
+        // not the bottleneck here. let's not worry about it for now.
+        let mut remaining_samples = &samples_buf[..];
+        while remaining_samples.len() > 0 {
+            all_samples.push(remaining_samples.read_f32::<LittleEndian>().unwrap());
+        }
+    }
+
+    all_samples
+}

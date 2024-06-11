@@ -68,5 +68,5 @@ def wavesunfiltered : for k : clock. ~^(k) sample =
     (maps @(k) (box amp) (phasor @(k) (0.1 / 48000.)))
     (maps @(k) (box (\x. x - 0.5)) (rands @(k) 1337));;
 
-def main : for k : clock. ~^(k) sample =
-  0. :: `(!(onepole @(k) 0.4 (wavesunfiltered @(k))));;
+let main : ~^(audio) sample =
+  0. :: `(!(onepole @(audio) 0.4 (wavesunfiltered @(audio))));;

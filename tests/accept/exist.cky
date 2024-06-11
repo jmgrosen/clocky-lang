@@ -12,3 +12,8 @@ def enum_some_stream : for a : type. (?c. ~^(c) a) -> ?c. ~^(c) (index * a) =
   \s.
     let clock c and sp = s in
     clock c and enum_stream $(a) @(c) sp;;
+
+def bang_bang : for c : clock. ~^(c) unit =
+  &^(c) s. () :: `(!(unbox s));;
+
+let main: ~^(audio) sample = &^(audio) s. 0. :: `(!(unbox s));;

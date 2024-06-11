@@ -1,0 +1,34 @@
+def batch2helper: for k : clock.
+  (~^(2k) sample -> |>^(2k) ~^(k) [sample; 2]) *
+  (sample -> ~^(2k) sample -> ~^(k) [sample; 2]) =
+  (&^(2k) bh.
+    ((\s0.
+      let (x0, s1) = %s0 in
+      `((let (b, h) = !(unbox bh) in h) x0 !s1)),
+     (\x0. \s1.
+       let (x1, s2) = %s1 in
+       [x0, x1] :: (`((let (b, h) = !(unbox bh) in b) !s2))
+                    : |>^(2k) |>^(2k) ~^(k) [sample; 2])));;
+
+def batch2: for k : clock. ~^(2k) sample -> |>^(2k) ~^(k) [sample; 2] =
+  let (b, h) = batch2helper @(k) in b;;
+
+def sample: for k1 : clock. for k2 : clock. ~^(k1) (~^(k2) sample) -> ~^(k1) sample =
+  &^(k1) sam. \s_out.
+    let (s_in, s_outp) = %s_out in
+    let (x, s_inp) = %s_in in
+    x :: `(!(unbox sam) !s_outp);;
+
+def switch: for k : clock. ~^(k) sample -> ~^(k) (unit + ~^(k) sample) -> ~^(k) sample =
+  &^(k) swi. \s. \e.
+    let (maybe_switch, ep) = %e in
+    case maybe_switch
+    { inl a  => let (x, sp) = %s in
+                x :: `(!(unbox swi) !sp !ep)
+    | inr ns => let (x, nsp) = %ns in
+                x :: `(!(unbox swi) !nsp !ep)
+    };;
+
+def foo: for c : clock. ~^(6c) sample -> |>^(6c) ~^(3c) [sample; 2] = batch2 @(3c);;
+
+let main: ~^(audio) sample = &^(audio) s. 0. :: `(!(unbox s));;

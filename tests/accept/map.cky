@@ -4,6 +4,6 @@ def mapsig: for k : clock. [](sample -> sample) -> ~^(k) sample -> ~^(k) sample 
          (unbox f) x :: `(!(unbox mappedsig) !siginp));;
 
 def lin: for k : clock. ~^(k) sample =
-    ((&^(k) s. \x. x :: `(!(unbox s) (addone x))) : sample -> ~^(k) sample) 2.0;;
+    ((&^(k) s. \x. x :: `(!(unbox s) (x + 1.0))) : sample -> ~^(k) sample) 0.0;;
 
-def main: for k : clock. ~^(k) sample = mapsig @(k) (box (\x. sin (addone (addone x)))) (lin @(k));;
+let main: ~^(audio) sample = mapsig @(audio) (box (\x. sin x))) (lin @(audio));;

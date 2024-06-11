@@ -3,8 +3,6 @@ use std::process::ExitCode;
 use std::{path::PathBuf, fs::File};
 use std::io::{Read, Write};
 
-use byteorder::{LittleEndian, ReadBytesExt};
-
 use typed_arena::Arena;
 
 use clap::Parser as CliParser;
@@ -44,7 +42,7 @@ enum Command {
     #[cfg(feature="run")]
     Sample {
         /// Code file to use
-        file: Option<PathBuf>,
+        file: PathBuf,
 
         /// Path to wav file to write to
         out: PathBuf,
@@ -111,34 +109,21 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
 }
 
 #[cfg(feature="run")]
-fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: PathBuf, length: f32) -> TopLevelResult<'a, ()> {
-    let wasm_bytes = match file.as_ref().map(|p| p.extension()) {
-        Some(Some(ext)) if ext == "wasm" => {
+fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: PathBuf, out: PathBuf, length: f32) -> TopLevelResult<'a, ()> {
+    let wasm_bytes = match file.extension() {
+        Some(ext) if ext == "wasm" => {
             let mut buf = Vec::new();
-            File::open(file.unwrap())?.read_to_end(&mut buf)?;
+            File::open(file)?.read_to_end(&mut buf)?;
             buf
         },
         _ => {
-            let code = read_file(file.as_deref())?;
+            let code = read_file(Some(&file))?;
             compile(toplevel, code)?
         },
     };
 
-    let engine = wasmtime::Engine::new(
-        &wasmtime::Config::new()
-            .profiler(wasmtime::ProfilingStrategy::PerfMap)
-    ).unwrap();
-    let module = wasmtime::Module::new(&engine, &wasm_bytes).unwrap();
-    let linker = wasmtime::Linker::new(&engine);
-    let mut store: wasmtime::Store<()> = wasmtime::Store::new(&engine, ());
-    let instance = linker.instantiate(&mut store, &module).unwrap();
-    let memory = instance.get_memory(&mut store, "memory").unwrap();
-
-    let alloc = instance.get_typed_func::<u32, u32>(&mut store, "alloc").unwrap();
-    let sample_scheduler = instance.get_typed_func::<(u32, u32, u32), u32>(&mut store, "sample_scheduler").unwrap();
-
-    let samples_ptr = alloc.call(&mut store, 4 * 128).unwrap();
-    let mut main = instance.get_global(&mut store, "main").unwrap().get(&mut store).unwrap_i32() as u32;
+    let num_samples = (length * 48000.0) as usize;
+    let samples = clocky::toplevel::run(&wasm_bytes, num_samples);
 
     let wav_spec = hound::WavSpec {
         channels: 1,
@@ -148,16 +133,8 @@ fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: PathB
     };
     let mut hound_writer = hound::WavWriter::create(out, wav_spec).unwrap();
 
-    const CHUNK_SIZE: u32 = 128;
-    let num_chunks = (length * 48000.0 / (CHUNK_SIZE as f32)) as usize;
-    for _ in 0..num_chunks {
-        main = sample_scheduler.call(&mut store, (main, CHUNK_SIZE, samples_ptr)).unwrap();
-        let mut samples_buf = [0u8; CHUNK_SIZE as usize*4];
-        memory.read(&mut store, samples_ptr as usize, &mut samples_buf).unwrap();
-        let mut remaining_samples = &samples_buf[..];
-        while remaining_samples.len() > 0 {
-            hound_writer.write_sample(remaining_samples.read_f32::<LittleEndian>().unwrap()).unwrap();
-        }
+    for sample in samples {
+        hound_writer.write_sample(sample).unwrap();
     }
 
     Ok(())
