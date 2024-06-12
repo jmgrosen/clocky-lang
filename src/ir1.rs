@@ -88,7 +88,6 @@ impl Con {
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Op {
     Const(Value),
-    UnboxedConst(Value),
     FAdd,
     FSub,
     FMul,
@@ -123,9 +122,14 @@ pub enum Op {
     // TODO: make this a more informative index?
     Proj(u32),
     UnGen,
+    // TODO: coalesce (some of?) these
     AllocAndFill,
+    AllocF32,
+    AllocI32,
     BuildClosure(Global),
     LoadGlobal(Global),
+    DerefF32,
+    DerefI32,
     ApplyCoeff(Ratio<u32>),
     SinceLastTickStream,
     Advance,
@@ -172,7 +176,6 @@ impl Op {
     fn arity(&self) -> Option<u8> {
         match *self {
             Op::Const(_) => Some(0),
-            Op::UnboxedConst(_) => Some(0),
             Op::FAdd => Some(2),
             Op::FSub => Some(2),
             Op::FMul => Some(2),
@@ -207,7 +210,11 @@ impl Op {
             Op::Proj(_) => Some(1),
             Op::UnGen => Some(1),
             Op::AllocAndFill => None,
+            Op::AllocI32 => Some(1),
+            Op::AllocF32 => Some(1),
             Op::BuildClosure(_) => None,
+            Op::DerefI32 => Some(1),
+            Op::DerefF32 => Some(1),
             Op::LoadGlobal(_) => Some(0),
             Op::ApplyCoeff(_) => Some(1),
             Op::SinceLastTickStream => Some(1),
@@ -361,6 +368,39 @@ impl Ctx {
     }
 }
 
+fn binop_types(b: HBinop) -> (Op, Op, Op) {
+    match b {
+        HBinop::FMul |
+        HBinop::FDiv |
+        HBinop::FAdd |
+        HBinop::FSub =>
+            (Op::DerefF32, Op::DerefF32, Op::AllocF32),
+        HBinop::FGt |
+        HBinop::FGe |
+        HBinop::FLt |
+        HBinop::FLe |
+        HBinop::FEq |
+        HBinop::FNe =>
+            (Op::DerefF32, Op::DerefF32, Op::AllocI32),
+        HBinop::Shl |
+        HBinop::Shr |
+        HBinop::And |
+        HBinop::Xor |
+        HBinop::Or |
+        HBinop::IMul |
+        HBinop::IDiv |
+        HBinop::IAdd |
+        HBinop::ISub |
+        HBinop::IGt |
+        HBinop::IGe |
+        HBinop::ILt |
+        HBinop::ILe |
+        HBinop::IEq |
+        HBinop::INe =>
+            (Op::DerefI32, Op::DerefI32, Op::AllocI32),
+    }
+}
+
 impl<'a> Translator<'a> {
     fn alloc(&self, e: Expr<'a>) -> &'a Expr<'a> {
         self.arena.alloc(e)
@@ -368,6 +408,14 @@ impl<'a> Translator<'a> {
 
     fn alloc_slice(&self, it: impl IntoIterator<Item=&'a Expr<'a>>) -> &'a [&'a Expr<'a>] {
         self.arena.alloc_slice(it)
+    }
+
+    fn make_alloc_f32(&self, e: &'a Expr<'a>) -> Expr<'a> {
+        Expr::Op(Op::AllocF32, self.alloc_slice([e]))
+    }
+
+    fn make_alloc_i32(&self, e: &'a Expr<'a>) -> Expr<'a> {
+        Expr::Op(Op::AllocI32, self.alloc_slice([e]))
     }
 
     pub fn translate<'b, R>(&self, ctx: Rc<Ctx>, expr: &'b HExpr<'b, R>) -> Expr<'a> {
@@ -381,11 +429,11 @@ impl<'a> Translator<'a> {
                     panic!("couldn't find a variable??")
                 },
             HExpr::Val(_, HValue::Unit) =>
-                Expr::Val(Value::Unit),
+                self.make_alloc_i32(self.alloc(Expr::Val(Value::Unit))),
             HExpr::Val(_, HValue::Sample(x)) =>
-                Expr::Val(Value::Sample(x)),
+                self.make_alloc_f32(self.alloc(Expr::Val(Value::Sample(x)))),
             HExpr::Val(_, HValue::Index(i)) =>
-                Expr::Val(Value::Index(i)),
+                self.make_alloc_i32(self.alloc(Expr::Val(Value::Index(i)))),
             HExpr::Annotate(_, next, _) =>
                 self.translate(ctx, next),
             HExpr::Lam(_, x, next) => {
@@ -508,9 +556,12 @@ impl<'a> Translator<'a> {
             HExpr::TypeApp(_, e, _) =>
                 self.translate(ctx, e),
             HExpr::Binop(_, op, e1, e2) => {
-                let e1p = self.translate(ctx.clone(), e1);
-                let e2p = self.translate(ctx, e2);
-                Expr::Op(Op::from_binop(op), self.alloc_slice([self.alloc(e1p), self.alloc(e2p)]))
+                let (a1o, a2o, ro) = binop_types(op);
+                let e1p = Expr::Op(a1o, self.alloc_slice([self.alloc(self.translate(ctx.clone(), e1))]));
+                let e2p = Expr::Op(a2o, self.alloc_slice([self.alloc(self.translate(ctx, e2))]));
+                Expr::Op(ro, self.alloc_slice([self.alloc(
+                    Expr::Op(Op::from_binop(op), self.alloc_slice([self.alloc(e1p), self.alloc(e2p)]))
+                )]))
             },
             HExpr::ExIntro(_, c, e) => {
                 // TODO: factor out this lookup logic

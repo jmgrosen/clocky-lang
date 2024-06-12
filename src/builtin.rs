@@ -46,25 +46,55 @@ fn g(interner: &mut DefaultStringInterner, name: &'static str) -> Symbol {
     interner.get_or_intern_static(name)
 }
 
+/*
+const fn alloc_f32(e: &'static ir2::Expr<'static>) -> &'static ir2::Expr<'static> {
+    &ir2::Expr::Op(Op::AllocF32, &[e])
+}
+*/
+
+macro_rules! alloc_f32 {
+    ( $e:expr ) => {
+        &ir2::Expr::Op(Op::AllocF32, &[$e])
+    }
+}
+
+macro_rules! alloc_i32 {
+    ( $e:expr ) => {
+        &ir2::Expr::Op(Op::AllocI32, &[$e])
+    }
+}
+
+macro_rules! deref_f32 {
+    ( $e:expr ) => {
+        &ir2::Expr::Op(Op::DerefF32, &[$e])
+    }
+}
+
+macro_rules! deref_i32 {
+    ( $e:expr ) => {
+        &ir2::Expr::Op(Op::DerefI32, &[$e])
+    }
+}
+
 builtins!(
     pi[0]
       { _ => Type::Sample }
-      [ &ir2::Expr::Op(Op::Pi, &[]) ],
+      [ alloc_f32!(&ir2::Expr::Op(Op::Pi, &[])) ],
     sin[1]
       { _ => Type::Function(Type::Sample.into(), Type::Sample.into()) }
-      [ &ir2::Expr::Op(Op::Sin, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+      [ alloc_f32!(&ir2::Expr::Op(Op::Sin, &[deref_f32!(&ir2::Expr::Var(DebruijnIndex(0)))])) ],
     cos[1]
       { _ => Type::Function(Type::Sample.into(), Type::Sample.into()) }
-      [ &ir2::Expr::Op(Op::Cos, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+      [ alloc_f32!(&ir2::Expr::Op(Op::Cos, &[deref_f32!(&ir2::Expr::Var(DebruijnIndex(0)))])) ],
     reinterpi[1]
       { _ => Type::Function(Type::Index.into(), Type::Sample.into()) }
-      [ &ir2::Expr::Op(Op::ReinterpI2F, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+      [ alloc_f32!(&ir2::Expr::Op(Op::ReinterpI2F, &[deref_i32!(&ir2::Expr::Var(DebruijnIndex(0)))])) ],
     reinterpf[1]
       { _ => Type::Function(Type::Sample.into(), Type::Index.into()) }
-      [ &ir2::Expr::Op(Op::ReinterpF2I, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+      [ alloc_i32!(&ir2::Expr::Op(Op::ReinterpF2I, &[deref_f32!(&ir2::Expr::Var(DebruijnIndex(0)))])) ],
     cast[1]
       { _ => Type::Function(Type::Index.into(), Type::Sample.into()) }
-      [ &ir2::Expr::Op(Op::CastI2F, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
+      [ alloc_f32!(&ir2::Expr::Op(Op::CastI2F, &[deref_i32!(&ir2::Expr::Var(DebruijnIndex(0)))])) ],
     since_tick[1]
       { i => Type::Forall(g(i, "c"), Kind::Clock, Type::Stream(Clock::from_var(g(i, "c")), Type::Sample.into()).into()) }
       [ &ir2::Expr::Op(Op::SinceLastTickStream, &[&ir2::Expr::Var(DebruijnIndex(0))]) ],
