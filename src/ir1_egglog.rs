@@ -124,7 +124,7 @@ impl ToEgglogConverter {
 
     fn exprs_to_list<'a>(&mut self, exprs: &[&'a Expr<'a>]) -> Term {
         let mut l = self.app("ELNil".into(), vec![]);
-        for e in exprs {
+        for e in exprs.into_iter().rev() {
             let t = self.expr_to_term(e);
             l = self.app("ELCons".into(), vec![t, l]);
         }
