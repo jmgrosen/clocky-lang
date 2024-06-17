@@ -39,6 +39,10 @@ enum Command {
         #[arg(short='o')]
         out: Option<PathBuf>,
     },
+    Egglog {
+        /// Code file to use
+        file: Option<PathBuf>,
+    },
     #[cfg(feature="run")]
     Sample {
         /// Code file to use
@@ -108,6 +112,13 @@ fn cmd_compile<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>, out: Opti
     Ok(())
 }
 
+fn cmd_egglog<'a>(toplevel: &mut TopLevel<'a>, file: Option<PathBuf>) -> TopLevelResult<'a, ()> {
+    let code = read_file(file.as_deref())?;
+    clocky::toplevel::egglog(toplevel, code)?;
+
+    Ok(())
+}
+
 #[cfg(feature="run")]
 fn cmd_sample<'a>(toplevel: &mut TopLevel<'a>, file: PathBuf, out: PathBuf, length: f32) -> TopLevelResult<'a, ()> {
     let wasm_bytes = match file.extension() {
@@ -150,6 +161,7 @@ fn main() -> Result<(), ExitCode> {
         Command::Parse { file, dump_to } => cmd_parse(&mut toplevel, file, dump_to),
         Command::Typecheck { file } => cmd_typecheck(&mut toplevel, file),
         Command::Compile { file, out } => cmd_compile(&mut toplevel, file, out),
+        Command::Egglog { file } => cmd_egglog(&mut toplevel, file),
         #[cfg(feature = "run")]
         Command::Sample { file, out, length } => cmd_sample(&mut toplevel, file, out, length),
     };

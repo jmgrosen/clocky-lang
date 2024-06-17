@@ -1,8 +1,10 @@
-use std::fmt;
+use std::fmt::{self, Write};
 use std::error::Error;
 use std::collections::HashMap;
 
 use crate::expr::{Expr, Symbol, TopLevelDefBody};
+use crate::ir1_egglog::{FromEgglogConverter, ToEgglogConverter};
+use egglog::{EGraph, Term, TermDag};
 use string_interner::{StringInterner, DefaultStringInterner};
 
 use typed_arena::Arena;
@@ -98,6 +100,155 @@ impl Name {
             Name::Clock(x) => x,
         }
     }
+}
+
+fn print_with_intermediate_helper(
+    termdag: &TermDag,
+    term: Term,
+    cache: &mut HashMap<Term, String>,
+    res: &mut String,
+) -> String {
+    if let Some(var) = cache.get(&term) {
+        return var.clone();
+    }
+
+    match &term {
+        Term::Lit(_) => termdag.to_string(&term),
+        Term::Var(_) => termdag.to_string(&term),
+        Term::App(head, children) => {
+            let child_vars = children
+                .iter()
+                .map(|child| {
+                    print_with_intermediate_helper(termdag, termdag.get(*child), cache, res)
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            let fresh_var = format!("__tmp{}", cache.len());
+            writeln!(res, "(let {fresh_var} ({head} {child_vars}))").unwrap();
+            cache.insert(term, fresh_var.clone());
+
+            fresh_var
+        }
+    }
+}
+
+pub fn egglog<'a>(toplevel: &mut TopLevel<'a>, code: String) -> TopLevelResult<'a, ()> {
+    let parsed_file = match toplevel.make_parser().parse_file(&code) {
+        Ok(parsed_file) => parsed_file,
+        Err(e) => { return Err(TopLevelError::ParseError(code, e)); }
+    };
+    let elabbed_file = toplevel.make_typechecker().check_file(&parsed_file).map_err(|e| TopLevelError::TypeError(code, e))?;
+
+    let defs = elabbed_file.defs;
+
+    let mut builtin_globals = HashMap::new();
+    let mut global_defs = Vec::new();
+    for (&name, builtin) in toplevel.builtins.iter() {
+        builtin_globals.insert(name, ir1::Global(global_defs.len() as u32));
+        global_defs.push(ir2::GlobalDef::Func {
+            rec: false,
+            arity: builtin.n_args as u32,
+            env_size: 0,
+            body: builtin.ir2_expr,
+        });
+    }
+
+    let mut global_clocks = HashMap::new();
+    for &name in toplevel.global_clocks.iter() {
+        global_clocks.insert(name, ir1::Global(global_defs.len() as u32));
+        global_defs.push(ir2::GlobalDef::ClosedExpr {
+            body: &ir2::Expr::Var(ir1::DebruijnIndex(0)),
+        });
+    }
+    for def in defs.iter() {
+        match def.body {
+            TopLevelDefBody::Def { .. } => {
+                builtin_globals.insert(def.name, ir1::Global(global_defs.len() as u32));
+            }
+            TopLevelDefBody::Clock { .. } => {
+                global_clocks.insert(def.name, ir1::Global(global_defs.len() as u32));
+            }
+        }
+        // push a dummy def that we'll replace later, to reserve the space
+        global_defs.push(ir2::GlobalDef::ClosedExpr {
+            body: &ir2::Expr::Var(ir1::DebruijnIndex(0)),
+        });
+    }
+
+    let expr_under_arena = Arena::new();
+    let expr_ptr_arena = Arena::new();
+    let expr_arena = util::ArenaPlus { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
+    let translator = ir1::Translator { globals: builtin_globals, global_clocks, arena: &expr_arena };
+
+    /*
+    let mut egraph: EGraph = Default::default();
+    egraph.parse_and_run_program(include_str!("ir1.egg")).unwrap();
+    */
+    let mut egglog_converter = ToEgglogConverter::new();
+    let mut term_cache = HashMap::<Term, String>::new();
+
+    let mut program = String::new();
+    
+    let _defs_ir1: HashMap<Name, &ir1::Expr<'_>> = toplevel.global_clocks.iter().enumerate().map(|(i, &name)| {
+        let clock_expr = &*expr_under_arena.alloc(
+            ir1::Expr::Op(ir1::Op::GetClock(i as u32), &[])
+        );
+        (Name::Clock(name), clock_expr)
+    }).chain(defs.iter().map(|def| {
+        match def.body {
+            TopLevelDefBody::Def { expr, .. } => {
+                // println!("compiling {}", toplevel.interner.resolve(def.name).unwrap());
+                let expr_ir1 = &*expr_under_arena.alloc(translator.translate(ir1::Ctx::Empty.into(), expr));
+                let term = egglog_converter.expr_to_term(expr_ir1);
+                let res = print_with_intermediate_helper(&egglog_converter.termdag, term, &mut term_cache, &mut program);
+                writeln!(&mut program, "(set (program \"{}\") {})", toplevel.interner.resolve(def.name).unwrap(), res).unwrap();
+                (Name::Term(def.name), expr_ir1)
+            },
+            TopLevelDefBody::Clock { freq } => {
+                let clock_expr = &*expr_under_arena.alloc(
+                    ir1::Expr::Op(ir1::Op::MakeClock(freq), &[])
+                );
+                let term = egglog_converter.expr_to_term(clock_expr);
+                let res = print_with_intermediate_helper(&egglog_converter.termdag, term, &mut term_cache, &mut program);
+                writeln!(program, "(set (clock \"{}\") {})", toplevel.interner.resolve(def.name).unwrap(), res).unwrap();
+                (Name::Clock(def.name), clock_expr)
+            },
+        }
+    })).collect();
+
+    let prologue = include_str!("ir1.egg");
+    let full_program = format!("
+{prologue}
+
+{program}
+
+(run 1)
+    ");
+
+    let mut egraph: EGraph = Default::default();
+    egraph.parse_and_run_program(&full_program).unwrap();
+
+    let mut from_converter = FromEgglogConverter {
+        termdag: Default::default(),
+        arena: &expr_arena,
+        expr_cache: Default::default(),
+        slice_cache: Default::default(),
+    };
+
+    for def in defs.iter() {
+        let name = toplevel.interner.resolve(def.name).unwrap();
+        let kind = match def.body {
+            TopLevelDefBody::Def { .. } => "program",
+            TopLevelDefBody::Clock { .. } => "clock",
+        };
+        let (sort, val) = egraph.eval_expr(&egglog::ast::Expr::Call((), kind.into(), vec![egglog::ast::Expr::Lit((), egglog::ast::Literal::String(name.into()))])).unwrap();
+        let (_, extracted) = egraph.extract(val, &mut from_converter.termdag, &sort);
+        println!("{}", from_converter.termdag.to_string(&extracted));
+        let expr = from_converter.term_to_expr(extracted);
+        println!("{}: {:?}", name, expr);
+    }
+
+    Ok(())
 }
 
 pub fn compile<'a>(toplevel: &mut TopLevel<'a>, code: String) -> TopLevelResult<'a, Vec<u8>> {

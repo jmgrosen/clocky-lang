@@ -3,6 +3,7 @@ pub mod builtin;
 pub mod parse;
 pub mod typing;
 pub mod ir1;
+pub mod ir1_egglog;
 pub mod ir2;
 pub mod util;
 pub mod wasm;
