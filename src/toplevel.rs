@@ -299,19 +299,71 @@ pub fn compile<'a>(toplevel: &mut TopLevel<'a>, code: String) -> TopLevelResult<
     let expr_arena = util::ArenaPlus { arena: &expr_under_arena, ptr_arena: &expr_ptr_arena };
     let translator = ir1::Translator { globals: builtin_globals, global_clocks, arena: &expr_arena };
 
+    let mut egglog_converter = ToEgglogConverter::new();
+    let mut term_cache = HashMap::<Term, String>::new();
+
+    let mut program = String::new();
+
+    let mut unopt_expr_ir1 = HashMap::new();
+
+    for def in defs.iter() {
+        match def.body {
+            TopLevelDefBody::Def { expr, .. } => {
+                // println!("compiling {}", toplevel.interner.resolve(def.name).unwrap());
+                let expr_ir1 = &*expr_under_arena.alloc(translator.translate(ir1::Ctx::Empty.into(), expr));
+                unopt_expr_ir1.insert(def.name, expr_ir1);
+                let term = egglog_converter.expr_to_term(expr_ir1);
+                let res = print_with_intermediate_helper(&egglog_converter.termdag, term, &mut term_cache, &mut program);
+                writeln!(&mut program, "(set (program \"{}\") {})", toplevel.interner.resolve(def.name).unwrap(), res).unwrap();
+            },
+            TopLevelDefBody::Clock { freq } => {
+                let clock_expr = &*expr_under_arena.alloc(
+                    ir1::Expr::Op(ir1::Op::MakeClock(freq), &[])
+                );
+                let term = egglog_converter.expr_to_term(clock_expr);
+                let res = print_with_intermediate_helper(&egglog_converter.termdag, term, &mut term_cache, &mut program);
+                writeln!(program, "(set (clock \"{}\") {})", toplevel.interner.resolve(def.name).unwrap(), res).unwrap();
+            },
+        }
+    }
+
+    let prologue = include_str!("ir1.egg");
+    let full_program = format!("
+{prologue}
+
+{program}
+
+(run 1)
+    ");
+
+    let mut egraph: EGraph = Default::default();
+    egraph.parse_and_run_program(&full_program).unwrap();
+
+    let mut from_converter = FromEgglogConverter {
+        termdag: Default::default(),
+        arena: &expr_arena,
+        expr_cache: Default::default(),
+        slice_cache: Default::default(),
+    };
     
     let mut main = None;
-    let defs_ir1: HashMap<Name, &ir1::Expr<'_>> = toplevel.global_clocks.iter().enumerate().map(|(i, &name)| {
+    let opt_defs_ir1: HashMap<Name, &ir1::Expr<'_>> = toplevel.global_clocks.iter().enumerate().map(|(i, &name)| {
         let clock_expr = &*expr_under_arena.alloc(
             ir1::Expr::Op(ir1::Op::GetClock(i as u32), &[])
         );
         (Name::Clock(name), clock_expr)
     }).chain(defs.iter().map(|def| {
         match def.body {
-            TopLevelDefBody::Def { expr, .. } => {
-                println!("compiling {}", toplevel.interner.resolve(def.name).unwrap());
-                let expr_ir1 = expr_under_arena.alloc(translator.translate(ir1::Ctx::Empty.into(), expr));
-                let (annotated, _) = translator.annotate_used_vars(expr_ir1);
+            TopLevelDefBody::Def { expr: _orig_expr, .. } => {
+                let name = toplevel.interner.resolve(def.name).unwrap();
+                let kind = "program";
+                let (sort, val) = egraph.eval_expr(&egglog::ast::Expr::Call((), kind.into(), vec![egglog::ast::Expr::Lit((), egglog::ast::Literal::String(name.into()))])).unwrap();
+                let (_, extracted) = egraph.extract(val, &mut from_converter.termdag, &sort);
+                let opt_expr = from_converter.term_to_expr(extracted);
+                let unopt_expr = unopt_expr_ir1[&def.name];
+                println!("unoptimized {name}: {unopt_expr:?}");
+                println!("optimized {name}: {opt_expr:?}");
+                let (annotated, _) = translator.annotate_used_vars(opt_expr);
                 let shifted = translator.shift(annotated, 0, 0, &imbl::HashMap::new());
                 (Name::Term(def.name), shifted)
             },
@@ -329,7 +381,7 @@ pub fn compile<'a>(toplevel: &mut TopLevel<'a>, code: String) -> TopLevelResult<
     let expr2_arena = util::ArenaPlus { arena: &expr2_under_arena, ptr_arena: &expr2_ptr_arena };
     let mut translator2 = ir2::Translator { arena: &expr2_arena, globals: global_defs };
 
-    for (name, expr) in defs_ir1 {
+    for (name, expr) in opt_defs_ir1 {
         let expr_ir2 = translator2.translate(expr);
         let def_idx = match name {
             Name::Term(sym) => translator.globals[&sym].0 as usize,
